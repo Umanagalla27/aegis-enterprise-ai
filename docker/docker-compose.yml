@@ -1,0 +1,37 @@
+services:
+  # 1. PostgreSQL 16 with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aegis-postgres
+    environment:
+      POSTGRES_USER: uma
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: aegis_db
+    ports:
+      - "5435:5432" # Port 5435 to avoid any collision with previous projects
+    volumes:
+      - aegis_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uma -d aegis_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis 7
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    ports:
+      - "6382:6379" # Port 6382 to avoid collisions
+
+  # 3. Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aegis-prometheus
+    ports:
+      - "9091:9090" # Port 9091 to avoid collisions
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+volumes:
+  aegis_pg_data:
