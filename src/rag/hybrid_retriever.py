@@ -44,9 +44,7 @@ class AegisHybridRetriever:
                 text = doc["text"]
                 metadata = doc.get("metadata", {})
 
-            self.documents.append(
-                {"chunk_id": chunk_id, "text": text, "metadata": metadata}
-            )
+            self.documents.append({"chunk_id": chunk_id, "text": text, "metadata": metadata})
             self.tokenized_corpus.append(self._tokenize(text))
 
         if self.tokenized_corpus:

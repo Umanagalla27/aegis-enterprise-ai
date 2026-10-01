@@ -11,8 +11,7 @@ def test_anomaly_detection_zscore_and_isolation_forest():
 
     # 1. Baseline normal events
     baseline = [
-        {"cpu_percent": 30.0, "memory_percent": 40.0, "latency_ms": 45.0}
-        for _ in range(50)
+        {"cpu_percent": 30.0, "memory_percent": 40.0, "latency_ms": 45.0} for _ in range(50)
     ]
     engine.fit_baseline(baseline)
 

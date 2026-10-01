@@ -68,14 +68,16 @@ def test_kafka_consumer_lag_and_offsets():
 
     # Produce 10 events
     for i in range(10):
-        producer.produce({
-            "event_id": f"evt-{i}",
-            "service_name": "api-gateway" if i % 2 == 0 else "rag-retrieval",
-            "cpu_percent": 30.0,
-            "memory_percent": 40.0,
-            "latency_ms": 20.0 + i,
-            "status_code": 200,
-        })
+        producer.produce(
+            {
+                "event_id": f"evt-{i}",
+                "service_name": "api-gateway" if i % 2 == 0 else "rag-retrieval",
+                "cpu_percent": 30.0,
+                "memory_percent": 40.0,
+                "latency_ms": 20.0 + i,
+                "status_code": 200,
+            }
+        )
 
     consumer = TelemetryKafkaConsumer(
         consumer_id="worker-01",
@@ -102,16 +104,41 @@ def test_spark_batch_aggregator(tmp_path: Path):
     aggregator = SparkBatchAggregator(output_path=parquet_file)
 
     sample_data = [
-        {"service_name": "api-gateway", "cpu_percent": 20, "memory_percent": 30,
-         "latency_ms": 10, "status_code": 200},
-        {"service_name": "api-gateway", "cpu_percent": 25, "memory_percent": 35,
-         "latency_ms": 50, "status_code": 200},
-        {"service_name": "api-gateway", "cpu_percent": 30, "memory_percent": 40,
-         "latency_ms": 100, "status_code": 500},
-        {"service_name": "rag-retrieval", "cpu_percent": 70, "memory_percent": 80,
-         "latency_ms": 200, "status_code": 200},
-        {"service_name": "rag-retrieval", "cpu_percent": 75, "memory_percent": 85,
-         "latency_ms": 300, "status_code": 200},
+        {
+            "service_name": "api-gateway",
+            "cpu_percent": 20,
+            "memory_percent": 30,
+            "latency_ms": 10,
+            "status_code": 200,
+        },
+        {
+            "service_name": "api-gateway",
+            "cpu_percent": 25,
+            "memory_percent": 35,
+            "latency_ms": 50,
+            "status_code": 200,
+        },
+        {
+            "service_name": "api-gateway",
+            "cpu_percent": 30,
+            "memory_percent": 40,
+            "latency_ms": 100,
+            "status_code": 500,
+        },
+        {
+            "service_name": "rag-retrieval",
+            "cpu_percent": 70,
+            "memory_percent": 80,
+            "latency_ms": 200,
+            "status_code": 200,
+        },
+        {
+            "service_name": "rag-retrieval",
+            "cpu_percent": 75,
+            "memory_percent": 85,
+            "latency_ms": 300,
+            "status_code": 200,
+        },
     ]
 
     summary_df, out_path = aggregator.run_daily_aggregation(sample_data)
@@ -178,23 +205,29 @@ def test_dbt_models_and_runner():
 
 def test_airflow_sla_gates():
     # 1. Healthy run passes gates
-    healthy_avail = pd.DataFrame([
-        {"service_name": "api-gateway", "availability_sla": 99.9},
-        {"service_name": "rag-retrieval", "availability_sla": 99.5},
-    ])
-    healthy_marts = pd.DataFrame([
-        {"service_name": "api-gateway", "mttr_minutes": 25.0},
-        {"service_name": "rag-retrieval", "mttr_minutes": 40.0},
-    ])
+    healthy_avail = pd.DataFrame(
+        [
+            {"service_name": "api-gateway", "availability_sla": 99.9},
+            {"service_name": "rag-retrieval", "availability_sla": 99.5},
+        ]
+    )
+    healthy_marts = pd.DataFrame(
+        [
+            {"service_name": "api-gateway", "mttr_minutes": 25.0},
+            {"service_name": "rag-retrieval", "mttr_minutes": 40.0},
+        ]
+    )
     result = evaluate_sla_gates(
         healthy_avail, healthy_marts, min_availability=99.0, max_mttr_minutes=60.0
     )
     assert result["status"] == "PASSED"
 
     # 2. Availability breach (< 99.0%) triggers gate failure
-    unhealthy_avail = pd.DataFrame([
-        {"service_name": "api-gateway", "availability_sla": 98.2},
-    ])
+    unhealthy_avail = pd.DataFrame(
+        [
+            {"service_name": "api-gateway", "availability_sla": 98.2},
+        ]
+    )
     with pytest.raises(SLABreachException) as exc_avail:
         evaluate_sla_gates(
             unhealthy_avail, healthy_marts, min_availability=99.0, max_mttr_minutes=60.0
@@ -202,9 +235,11 @@ def test_airflow_sla_gates():
     assert "Availability SLA Breach" in str(exc_avail.value)
 
     # 3. MTTR breach (> 60m) triggers gate failure
-    unhealthy_marts = pd.DataFrame([
-        {"service_name": "rag-retrieval", "mttr_minutes": 85.0},
-    ])
+    unhealthy_marts = pd.DataFrame(
+        [
+            {"service_name": "rag-retrieval", "mttr_minutes": 85.0},
+        ]
+    )
     with pytest.raises(SLABreachException) as exc_mttr:
         evaluate_sla_gates(
             healthy_avail, unhealthy_marts, min_availability=99.0, max_mttr_minutes=60.0

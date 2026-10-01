@@ -95,9 +95,7 @@ def evaluate_sla_gates(
         mttr = float(row.get("mttr_minutes", 0.0))
         svc = row.get("service_name", "unknown")
         if mttr > max_mttr_minutes:
-            violations.append(
-                f"MTTR SLA Breach on '{svc}': {mttr:.1f}m > {max_mttr_minutes:.1f}m"
-            )
+            violations.append(f"MTTR SLA Breach on '{svc}': {mttr:.1f}m > {max_mttr_minutes:.1f}m")
 
     if violations:
         error_msg = " | ".join(violations)

@@ -62,9 +62,7 @@ class EnterpriseRagasEvaluator:
     def evaluate_dataset(self, test_samples: list[dict[str, Any]]) -> RagasMetricScore:
         """Evaluates batch test dataset and verifies CI gate thresholds."""
         scores = [
-            self.evaluate_sample(
-                s["query"], s["contexts"], s["answer"], s["ground_truth"]
-            )
+            self.evaluate_sample(s["query"], s["contexts"], s["answer"], s["ground_truth"])
             for s in test_samples
         ]
 

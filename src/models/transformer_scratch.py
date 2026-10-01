@@ -28,21 +28,9 @@ class MultiHeadSelfAttention(nn.Module):
         batch_size, seq_len, _ = x.size()
 
         # 1. Project and split into heads: [batch_size, num_heads, seq_len, d_k]
-        q = (
-            self.w_q(x)
-            .view(batch_size, seq_len, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
-        k = (
-            self.w_k(x)
-            .view(batch_size, seq_len, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
-        v = (
-            self.w_v(x)
-            .view(batch_size, seq_len, self.num_heads, self.d_k)
-            .transpose(1, 2)
-        )
+        q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        k = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        v = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
 
         # 2. Scaled Dot-Product Attention
         scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
@@ -54,9 +42,7 @@ class MultiHeadSelfAttention(nn.Module):
         context = torch.matmul(attention_weights, v)
 
         # 3. Concatenate heads and project output
-        context = (
-            context.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        )
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
         return self.w_o(context)
 
 
@@ -66,9 +52,7 @@ class TinyTransformerBlock(nn.Module):
         self.attention = MultiHeadSelfAttention(d_model, num_heads)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model)
-        )
+        self.ffn = nn.Sequential(nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Pre-LN Transformer block with residual connections

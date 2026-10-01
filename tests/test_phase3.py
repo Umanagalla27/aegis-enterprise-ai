@@ -52,9 +52,7 @@ def test_langgraph_hitl_execution_flow():
     assert len(snapshot.next) > 0  # Halted at action_planning_node
 
     # 2. Resume with approval
-    for _ in app.stream(
-        Command(resume={"approved": True, "reviewer": "Alice_SRE"}), config=config
-    ):
+    for _ in app.stream(Command(resume={"approved": True, "reviewer": "Alice_SRE"}), config=config):
         pass
 
     final = app.get_state(config).values

@@ -1,6 +1,6 @@
 import logging
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Ensure repository root is on sys.path when executed directly
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -17,15 +17,11 @@ def run_chaos_benchmark():
 
     # Fit baseline
     baseline = [
-        {"cpu_percent": 30.0, "memory_percent": 45.0, "latency_ms": 42.0}
-        for _ in range(80)
+        {"cpu_percent": 30.0, "memory_percent": 45.0, "latency_ms": 42.0} for _ in range(80)
     ]
     engine.fit_baseline(baseline)
 
-    fault_types = (
-        ["LATENCY_SPIKE", "OOM_CRASH", "ERROR_BURST"] * 6
-        + ["LATENCY_SPIKE", "OOM_CRASH"]
-    )
+    fault_types = ["LATENCY_SPIKE", "OOM_CRASH", "ERROR_BURST"] * 6 + ["LATENCY_SPIKE", "OOM_CRASH"]
     detected_count = 0
     correct_triage_count = 0
 

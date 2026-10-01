@@ -26,10 +26,7 @@ class ConsumerGroupManager:
         member_idx = self.members.index(consumer_id)
         total_members = len(self.members)
 
-        return [
-            p for p in range(self.num_partitions)
-            if p % total_members == member_idx
-        ]
+        return [p for p in range(self.num_partitions) if p % total_members == member_idx]
 
 
 class TelemetryKafkaConsumer:

@@ -31,17 +31,23 @@ class SparkBatchAggregator:
         self.output_path = Path(output_path or self.DEFAULT_OUTPUT_PATH)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def aggregate_batch(
-        self, records: list[dict[str, Any]] | pd.DataFrame
-    ) -> pd.DataFrame:
+    def aggregate_batch(self, records: list[dict[str, Any]] | pd.DataFrame) -> pd.DataFrame:
         """Aggregates telemetry records by service, formulating quantiles and SLA metrics."""
         if isinstance(records, list):
             if not records:
-                return pd.DataFrame(columns=[
-                    "service_name", "total_requests", "total_errors_5xx",
-                    "availability_sla", "latency_p50_ms", "latency_p95_ms",
-                    "latency_p99_ms", "avg_cpu_percent", "avg_memory_percent"
-                ])
+                return pd.DataFrame(
+                    columns=[
+                        "service_name",
+                        "total_requests",
+                        "total_errors_5xx",
+                        "availability_sla",
+                        "latency_p50_ms",
+                        "latency_p95_ms",
+                        "latency_p99_ms",
+                        "avg_cpu_percent",
+                        "avg_memory_percent",
+                    ]
+                )
             df = pd.DataFrame(records)
         else:
             df = records.copy()
@@ -65,17 +71,19 @@ class SparkBatchAggregator:
             avg_cpu = float(group["cpu_percent"].mean())
             avg_mem = float(group["memory_percent"].mean())
 
-            summary_rows.append({
-                "service_name": service,
-                "total_requests": total_requests,
-                "total_errors_5xx": server_errors,
-                "availability_sla": round(availability, 4),
-                "latency_p50_ms": round(p50, 2),
-                "latency_p95_ms": round(p95, 2),
-                "latency_p99_ms": round(p99, 2),
-                "avg_cpu_percent": round(avg_cpu, 2),
-                "avg_memory_percent": round(avg_mem, 2),
-            })
+            summary_rows.append(
+                {
+                    "service_name": service,
+                    "total_requests": total_requests,
+                    "total_errors_5xx": server_errors,
+                    "availability_sla": round(availability, 4),
+                    "latency_p50_ms": round(p50, 2),
+                    "latency_p95_ms": round(p95, 2),
+                    "latency_p99_ms": round(p99, 2),
+                    "avg_cpu_percent": round(avg_cpu, 2),
+                    "avg_memory_percent": round(avg_mem, 2),
+                }
+            )
 
         summary_df = pd.DataFrame(summary_rows)
         return summary_df
@@ -89,9 +97,7 @@ class SparkBatchAggregator:
         summary_df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
         return path
 
-    def run_daily_aggregation(
-        self, records: list[dict[str, Any]]
-    ) -> tuple[pd.DataFrame, Path]:
+    def run_daily_aggregation(self, records: list[dict[str, Any]]) -> tuple[pd.DataFrame, Path]:
         """Runs end-to-end distributed batch aggregation and parquet output."""
         summary_df = self.aggregate_batch(records)
         output_file = self.export_to_parquet(summary_df)

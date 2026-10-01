@@ -89,13 +89,13 @@ def action_planning_node(state: AegisAgentState) -> dict:
 
     if triage.requires_human_approval:
         # HITL Interrupt
-        action_dict = (
-            action.model_dump() if hasattr(action, "model_dump") else action.dict()
+        action_dict = action.model_dump() if hasattr(action, "model_dump") else action.dict()
+        decision = interrupt(
+            {
+                "prompt": f"Authorize remediation rollback for {state['ticket'].service_name}?",
+                "action": action_dict,
+            }
         )
-        decision = interrupt({
-            "prompt": f"Authorize remediation rollback for {state['ticket'].service_name}?",
-            "action": action_dict,
-        })
         if decision.get("approved") is True:
             action.status = "approved"
             action.result = f"Approved by {decision.get('reviewer', 'SRE_Lead')}"
@@ -110,11 +110,7 @@ def execution_node(state: AegisAgentState) -> dict:
     actions = state.get("actions", [])
     if not actions:
         return {"review_status": "resolved"}
-    latest = (
-        actions[-1].model_copy()
-        if hasattr(actions[-1], "model_copy")
-        else actions[-1].copy()
-    )
+    latest = actions[-1].model_copy() if hasattr(actions[-1], "model_copy") else actions[-1].copy()
 
     if latest.status == "approved":
         res = execute_deployment_rollback(**latest.parameters)
