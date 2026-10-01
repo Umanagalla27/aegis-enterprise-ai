@@ -1,0 +1,75 @@
+name: Aegis Enterprise AI CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    name: Code Quality, Unit Tests & Regression Gates
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: aegis_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Ruff Code Quality Checks
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run Phase 2 (RAG & Model Serving) Tests
+        run: pytest tests/test_phase2.py -v
+
+      - name: Run Phase 3 (Multi-Agent & Security) Tests
+        run: pytest tests/test_phase3.py -v
+
+      - name: Run Phase 4 (Kafka, Spark, dbt, Airflow) Tests
+        run: pytest tests/test_phase4.py -v
+
+      - name: Run Phase 5 (AIOps, RCA & Prometheus) Tests
+        run: pytest tests/test_phase5.py -v
+
+      - name: Run Phase 7 (RAGAS & Agent Regression Gates) Tests
+        run: pytest eval/test_eval_gates.py -v
+
+      - name: Run 20-Fault Chaos Engineering Evaluation
+        run: python eval/run_aiops_eval.py

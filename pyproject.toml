@@ -15,3 +15,7 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["BLE001"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider --basetemp=results/tmp"
+pythonpath = ["."]
