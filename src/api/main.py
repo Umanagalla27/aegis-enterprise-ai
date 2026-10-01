@@ -2,9 +2,11 @@ import time
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from src.agents.rca_agent import RootCauseAnalysisAgent
+from src.api.dashboard import get_dashboard_html
 from src.observability.anomaly_engine import HybridAnomalyEngine
 from src.observability.prometheus_exporter import (
     HTTP_REQUEST_DURATION_SECONDS,
@@ -64,6 +66,12 @@ class DiagnoseRequest(BaseModel):
     observed_latency_ms: float
     error_logs: list[dict] = []
     recent_commits: list[dict] = []
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Serves the Aegis Enterprise AI interactive web control center."""
+    return get_dashboard_html()
 
 
 @app.get("/health")
