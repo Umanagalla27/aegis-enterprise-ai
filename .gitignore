@@ -235,3 +235,5 @@ terraform.rc
 # Binaries and temp test paths
 *.exe
 results/tmp/
+*.db
+mlflow.db
