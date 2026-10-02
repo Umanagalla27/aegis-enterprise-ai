@@ -119,6 +119,26 @@ flowchart TD
 
 ---
 
+## 📸 Live Platform Gallery & Video Tour
+
+<div align="center">
+  <img src="docs/media/aegis_ports_tour.webp" alt="Aegis Multi-Port Live Tour" width="850px" />
+  <p><i>Live browser session recording across all platform ports (8000, 9091, 3001, 5000)</i></p>
+</div>
+
+| Port | Service Component | Interactive View |
+| :--- | :--- | :--- |
+| **8000** | **Aegis Control Center & Health Matrix** | <img src="docs/media/port_8000_aegis_dashboard.png" width="400px" /> |
+| **8000** | **Hybrid RAG & Microservice Topology** | <img src="docs/media/port_8000_tab_rag_topology.png" width="400px" /> |
+| **8000** | **Multi-Agent Orchestrator & HITL Gates** | <img src="docs/media/port_8000_tab_multiagent_security.png" width="400px" /> |
+| **8000** | **Airflow SRE Pipeline & PySpark Quantiles** | <img src="docs/media/port_8000_tab_airflow_pyspark.png" width="400px" /> |
+| **8000** | **20-Fault Chaos & Evaluation Gates** | <img src="docs/media/port_8000_tab_eval_chaos.png" width="400px" /> |
+| **9091** | **Prometheus Metrics Query Engine** | <img src="docs/media/port_9091_prometheus.png" width="400px" /> |
+| **3001** | **Grafana Production SRE Dashboards** | <img src="docs/media/port_3001_grafana.png" width="400px" /> |
+| **5000** | **MLflow Experiment & Model Registry** | <img src="docs/media/port_5000_mlflow.png" width="400px" /> |
+
+---
+
 ## ⚡ Key Architectural Highlights
 
 ### 1. Transformer Self-Attention from Scratch
