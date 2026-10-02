@@ -122,8 +122,8 @@ flowchart TD
 ## 📸 Live Platform Gallery & Video Tour
 
 <div align="center">
-  <img src="docs/media/aegis_ports_tour.webp" alt="Aegis Multi-Port Live Tour" width="850px" />
-  <p><i>Live browser session recording across all platform ports (8000, 9091, 3001, 5000)</i></p>
+  <img src="docs/media/aegis_ports_tour.gif" alt="Aegis Multi-Port Live Tour" width="850px" />
+  <p><i>Live browser session recording cycling across all platform ports (8000, 9091, 3001, 5000)</i></p>
 </div>
 
 | Port | Service Component | Interactive View |
