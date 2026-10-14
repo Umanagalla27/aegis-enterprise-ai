@@ -1,0 +1,76 @@
+{
+  "spark_aggregate_batch": [
+    {
+      "service_name": "api-gateway",
+      "total_requests": 3,
+      "total_errors_5xx": 1,
+      "availability_sla": 66.6667,
+      "latency_p50_ms": 18.2,
+      "latency_p95_ms": 109.82,
+      "latency_p99_ms": 117.96,
+      "avg_cpu_percent": 38.33,
+      "avg_memory_percent": 44.0
+    },
+    {
+      "service_name": "rag-retrieval",
+      "total_requests": 2,
+      "total_errors_5xx": 1,
+      "availability_sla": 50.0,
+      "latency_p50_ms": 1297.5,
+      "latency_p95_ms": 2379.75,
+      "latency_p99_ms": 2475.95,
+      "avg_cpu_percent": 85.0,
+      "avg_memory_percent": 85.5
+    }
+  ],
+  "parquet_export": "SKIPPED: pyarrow not installed in this environment",
+  "dbt_stg_incidents": [
+    {
+      "ticket_id": "TKT-101",
+      "service_name": "rag-retrieval",
+      "severity": "P2",
+      "started_at": "2026-09-30 10:00:00",
+      "resolved_at": "2026-09-30 10:45:00",
+      "duration_minutes": 45.0,
+      "sla_target_minutes": 60,
+      "is_sla_breached": 0
+    },
+    {
+      "ticket_id": "TKT-102",
+      "service_name": "api-gateway",
+      "severity": "P3",
+      "started_at": "2026-09-30 11:00:00",
+      "resolved_at": "2026-09-30 11:30:00",
+      "duration_minutes": 30.0,
+      "sla_target_minutes": 240,
+      "is_sla_breached": 0
+    }
+  ],
+  "dbt_fct_service_reliability": [
+    {
+      "service_name": "api-gateway",
+      "total_incidents": 1,
+      "p1_incident_count": 0,
+      "p2_incident_count": 0,
+      "mttr_minutes": 30.0,
+      "total_sla_breaches": 0,
+      "reliability_tier": "ACCEPTABLE"
+    },
+    {
+      "service_name": "rag-retrieval",
+      "total_incidents": 1,
+      "p1_incident_count": 0,
+      "p2_incident_count": 1,
+      "mttr_minutes": 45.0,
+      "total_sla_breaches": 0,
+      "reliability_tier": "ACCEPTABLE"
+    }
+  ],
+  "airflow_gate_on_default_events": {
+    "status": "PASSED",
+    "min_availability_verified": 99.0,
+    "max_mttr_verified": 60.0,
+    "evaluated_services_count": 2
+  },
+  "airflow_gate_on_sample_with_5xx": "SLABreachException: SLA Gates Failed: Availability SLA Breach on 'api-gateway': 66.67% < 99.00% | Availability SLA Breach on 'rag-retrieval': 50.00% < 99.00%"
+}

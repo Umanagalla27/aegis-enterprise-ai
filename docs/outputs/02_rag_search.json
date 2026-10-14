@@ -1,0 +1,51 @@
+{
+  "query": "GPU out of memory",
+  "query_rewriter_expansions": [
+    "GPU out of memory",
+    "GPU out of memory CUDA Out of Memory memory leak heap allocation"
+  ],
+  "step1_bm25_sparse": [
+    [
+      "RUNBOOK-101",
+      11.0504
+    ]
+  ],
+  "step2_word_overlap_dense": [
+    [
+      "RUNBOOK-101",
+      0.4472
+    ],
+    [
+      "RUNBOOK-102",
+      0.0
+    ],
+    [
+      "RUNBOOK-103",
+      0.0
+    ]
+  ],
+  "step3_rrf_fused": [
+    [
+      "RUNBOOK-101",
+      0.03279
+    ]
+  ],
+  "rrf_math_for_top_hit": "1/(60+1) + 1/(60+1) = 0.03279 when ranked #1 in both lists",
+  "POST /v1/rag/search": {
+    "query": "GPU out of memory",
+    "results": [
+      {
+        "chunk_id": "RUNBOOK-101",
+        "text": "Runbook 101: GPU CUDA Out of Memory (OOM) Mitigation. Reduce batch size to 32, enable flash-attention, and clear CUDA cache.",
+        "score": 0.0328
+      }
+    ]
+  },
+  "no_match_query": {
+    "query": "kubernetes certificate rotation",
+    "result": {
+      "query": "kubernetes certificate rotation",
+      "results": []
+    }
+  }
+}

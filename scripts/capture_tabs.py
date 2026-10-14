@@ -1,8 +1,10 @@
 import asyncio
 from pathlib import Path
+
 from playwright.async_api import async_playwright
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "media"
+
 
 async def capture_tabs():
     async with async_playwright() as p:
@@ -47,6 +49,7 @@ async def capture_tabs():
                 print(f"Error capturing {tab_id}: {e}")
 
         await browser.close()
+
 
 if __name__ == "__main__":
     asyncio.run(capture_tabs())

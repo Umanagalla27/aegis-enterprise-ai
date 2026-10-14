@@ -1,18 +1,27 @@
+import os
 import socket
 import time
+import uuid
+from collections import defaultdict, deque
+from dataclasses import asdict
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from langgraph.types import Command
+from pydantic import BaseModel, Field
 
+from eval.agent_evaluator import MultiAgentBenchmarkEvaluator
 from eval.ragas_evaluator import EnterpriseRagasEvaluator
-from eval.run_aiops_eval import run_chaos_benchmark
+from eval.run_aiops_eval import evaluate_chaos
+from src.agents.graph import build_aegis_graph
 from src.agents.rca_agent import RootCauseAnalysisAgent
+from src.agents.state import IncidentTicket
 from src.api.dashboard import get_dashboard_html
 from src.mcp.server import graph_rag, retriever
 from src.observability.anomaly_engine import HybridAnomalyEngine
 from src.observability.prometheus_exporter import (
+    ANOMALY_DETECTIONS_TOTAL,
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_TOTAL,
     get_prometheus_metrics,
@@ -26,17 +35,29 @@ app = FastAPI(
     description="Unified Enterprise GenAI & AIOps Platform",
 )
 
-# CORS
+# CORS: explicit origins from the environment instead of "*" combined with
+# allow_credentials=True, which lets any website make credentialed calls.
+_cors_origins = os.getenv("AEGIS_CORS_ORIGINS", "http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in _cors_origins if o.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
-anomaly_engine = HybridAnomalyEngine()
 rca_agent = RootCauseAnalysisAgent()
+
+# Rolling per-service telemetry baselines. The engine used to be created with no
+# baseline, so every Z-score was 0 and /v1/telemetry/ingest could never flag anything.
+TELEMETRY_WARMUP_EVENTS = 20
+TELEMETRY_WINDOW = 500
+_telemetry_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=TELEMETRY_WINDOW))
+
+# One compiled LangGraph app for the process. MemorySaver keeps each incident's
+# state (keyed by thread_id) in memory, so it is lost when the server restarts.
+agent_app = build_aegis_graph()
+_agent_threads: set[str] = set()
 
 # Pre-populate RAG runbooks for instant interactive testing
 if not retriever.documents:
@@ -76,14 +97,19 @@ async def monitor_requests(request: Request, call_next):
     response = await call_next(request)
     duration = time.time() - start_time
 
+    # Label by the route template ("/v1/agent/incidents/{thread_id}"), not the raw URL.
+    # Raw paths create one time series per incident id (unbounded label cardinality).
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", "unmatched")
+
     HTTP_REQUESTS_TOTAL.labels(
         method=request.method,
-        endpoint=request.url.path,
+        endpoint=endpoint,
         status_code=response.status_code,
     ).inc()
 
     HTTP_REQUEST_DURATION_SECONDS.labels(
-        endpoint=request.url.path,
+        endpoint=endpoint,
     ).observe(duration)
 
     return response
@@ -111,6 +137,17 @@ class DiagnoseRequest(BaseModel):
     observed_latency_ms: float
     error_logs: list[dict] = []
     recent_commits: list[dict] = []
+
+
+class AgentIncidentRequest(BaseModel):
+    service_name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=4000)
+    ticket_id: str | None = None
+
+
+class AgentDecisionRequest(BaseModel):
+    approved: bool
+    reviewer: str = Field(min_length=1, max_length=100)
 
 
 class RAGQueryRequest(BaseModel):
@@ -190,8 +227,46 @@ def get_services_status():
 
 @app.post("/v1/telemetry/ingest")
 def ingest_telemetry(event: TelemetryEvent):
-    res = anomaly_engine.detect_zscore("latency_ms", event.latency_ms)
-    return {"service": event.service_name, "anomaly_result": res}
+    """Scores an event against that service's own recent history.
+
+    The first TELEMETRY_WARMUP_EVENTS events per service only build the baseline.
+    Anomalous events are not added to the window, so a spike cannot poison the baseline.
+    """
+    history = _telemetry_history[event.service_name]
+    sample = {
+        "cpu_percent": event.cpu_percent,
+        "memory_percent": event.memory_percent,
+        "latency_ms": event.latency_ms,
+    }
+
+    if len(history) < TELEMETRY_WARMUP_EVENTS:
+        history.append(sample)
+        return {
+            "service": event.service_name,
+            "status": "WARMING_UP",
+            "baseline_events": len(history),
+            "events_needed": TELEMETRY_WARMUP_EVENTS,
+            "anomaly_result": None,
+        }
+
+    engine = HybridAnomalyEngine()
+    engine.fit_statistics(list(history))
+    # Score every metric: a memory leak with normal latency used to go unnoticed.
+    per_metric = {metric: engine.detect_zscore(metric, value) for metric, value in sample.items()}
+    worst = max(per_metric.values(), key=lambda r: abs(r.details["z_score"]))
+    if worst.is_anomaly:
+        ANOMALY_DETECTIONS_TOTAL.labels(
+            detector_type=worst.detector_type, severity=worst.severity
+        ).inc()
+    else:
+        history.append(sample)
+    return {
+        "service": event.service_name,
+        "status": "SCORED",
+        "baseline_events": len(history),
+        "anomaly_result": asdict(worst),
+        "per_metric": {m: asdict(r) for m, r in per_metric.items()},
+    }
 
 
 @app.post("/v1/incidents/diagnose")
@@ -216,8 +291,7 @@ def search_rag(req: RAGQueryRequest):
     return {
         "query": req.query,
         "results": [
-            {"chunk_id": h.chunk_id, "text": h.text, "score": round(h.score, 4)}
-            for h in hits
+            {"chunk_id": h.chunk_id, "text": h.text, "score": round(h.score, 4)} for h in hits
         ],
     }
 
@@ -250,12 +324,32 @@ def inspect_security(req: SecurityInspectRequest):
 
 @app.post("/v1/eval/chaos")
 def trigger_chaos_eval():
-    """Executes the 20-injected fault chaos evaluation benchmark."""
-    passed = run_chaos_benchmark()
+    """Executes the 20-fault chaos benchmark plus 10 healthy controls."""
+    summary = evaluate_chaos()
     return {
-        "passed": passed,
-        "total_faults": 20,
+        "passed": summary.passed,
+        "total_faults": summary.total_faults,
+        "total_controls": summary.total_controls,
+        "detection_rate": summary.detection_rate,
+        "triage_accuracy": summary.triage_accuracy,
+        "false_positive_rate": summary.false_positive_rate,
         "fault_types": ["LATENCY_SPIKE", "OOM_CRASH", "ERROR_BURST"],
+        "cases": [asdict(c) for c in summary.cases],
+    }
+
+
+@app.post("/v1/eval/agents")
+def trigger_agent_eval():
+    """Runs the real LangGraph workflow over 50 labelled scenarios."""
+    result = MultiAgentBenchmarkEvaluator().run_50_scenarios()
+    misses = [asdict(o) for o in result.outcomes if not (o.correct and o.hitl_compliant)]
+    return {
+        "total_scenarios": result.total_scenarios,
+        "routing_accuracy": result.tool_selection_accuracy,
+        "trajectory_efficiency_pct": result.trajectory_efficiency_pct,
+        "hitl_compliance_pct": result.hitl_approval_compliance,
+        "passed_gate": result.passed_gate,
+        "failed_scenarios": misses,
     }
 
 
@@ -286,7 +380,15 @@ def trigger_ragas_eval():
         },
     ]
     scores = evaluator.evaluate_dataset(dataset)
+    per_sample = [
+        {
+            "query": d["query"],
+            **evaluator.evaluate_sample(d["query"], d["contexts"], d["answer"], d["ground_truth"]),
+        }
+        for d in dataset
+    ]
     return {
+        "per_sample": per_sample,
         "faithfulness": scores.faithfulness,
         "context_recall": scores.context_recall,
         "answer_relevance": scores.answer_relevance,
@@ -298,9 +400,13 @@ def trigger_ragas_eval():
 @app.post("/v1/airflow/run-etl")
 def trigger_airflow_etl():
     """Executes the complete Airflow SRE ETL pipeline with Spark and dbt marts."""
-    from data_platform.airflow.dags.daily_sre_etl import run_pipeline
+    from data_platform.airflow.dags.daily_sre_etl import SLABreachException, run_pipeline
 
-    result = run_pipeline()
+    try:
+        result = run_pipeline()
+    except SLABreachException as breach:
+        # A breached SLA is a valid pipeline outcome, not a server crash (was HTTP 500).
+        return {"status": "SLA_BREACH", "violations": str(breach)}
     return {
         "status": "SUCCESS",
         "gate_evaluation": result["gate_evaluation"],
@@ -367,3 +473,80 @@ def trigger_spark_aggregation():
         "aggregated_metrics": summary_df.to_dict(orient="records"),
     }
 
+
+# ---------------------------------------------------------------------------
+# LangGraph multi-agent workflow with Human-in-the-Loop approval
+# ---------------------------------------------------------------------------
+
+
+def _agent_view(thread_id: str) -> dict:
+    """Serialises the current LangGraph state for one incident thread."""
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = agent_app.get_state(config)
+    values = snapshot.values
+    pending = [intr.value for task in snapshot.tasks for intr in getattr(task, "interrupts", ())]
+    triage = values.get("triage")
+    return {
+        "thread_id": thread_id,
+        "status": "AWAITING_APPROVAL" if snapshot.next else "COMPLETED",
+        "next_nodes": list(snapshot.next),
+        "pending_approval": pending[0] if pending else None,
+        "ticket": values["ticket"].model_dump() if values.get("ticket") else None,
+        "security_flagged": values.get("security_flagged"),
+        "triage": triage.model_dump() if triage else None,
+        "kb_research": values.get("kb_research"),
+        "rca_diagnosis": values.get("rca_diagnosis"),
+        "actions": [a.model_dump() for a in values.get("actions", [])],
+        "review_status": values.get("review_status"),
+        "resolution_notes": values.get("resolution_notes"),
+    }
+
+
+@app.post("/v1/agent/incidents")
+def start_agent_incident(req: AgentIncidentRequest):
+    """Runs security -> triage -> research -> RCA -> planning.
+
+    P1/P2 incidents pause before any rollback and wait for a human decision.
+    """
+    thread_id = f"inc-{uuid.uuid4().hex[:12]}"
+    ticket = IncidentTicket(
+        ticket_id=req.ticket_id or thread_id.upper(),
+        service_name=req.service_name,
+        description=req.description,
+    )
+    state = {
+        "ticket": ticket,
+        "security_flagged": False,
+        "triage": None,
+        "kb_research": None,
+        "rca_diagnosis": None,
+        "actions": [],
+        "review_status": "pending",
+        "resolution_notes": None,
+    }
+    config = {"configurable": {"thread_id": thread_id}}
+    for _ in agent_app.stream(state, config=config):
+        pass
+    _agent_threads.add(thread_id)
+    return _agent_view(thread_id)
+
+
+@app.get("/v1/agent/incidents/{thread_id}")
+def get_agent_incident(thread_id: str):
+    if thread_id not in _agent_threads:
+        raise HTTPException(status_code=404, detail="Unknown incident thread")
+    return _agent_view(thread_id)
+
+
+@app.post("/v1/agent/incidents/{thread_id}/decision")
+def decide_agent_incident(thread_id: str, req: AgentDecisionRequest):
+    """Resumes a paused incident with the reviewer's approve/reject decision."""
+    if thread_id not in _agent_threads:
+        raise HTTPException(status_code=404, detail="Unknown incident thread")
+    config = {"configurable": {"thread_id": thread_id}}
+    if not agent_app.get_state(config).next:
+        raise HTTPException(status_code=409, detail="Incident is not awaiting approval")
+    decision = {"approved": req.approved, "reviewer": req.reviewer}
+    for _ in agent_app.stream(Command(resume=decision), config=config):
+        pass
+    return _agent_view(thread_id)

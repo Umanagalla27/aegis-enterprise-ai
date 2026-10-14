@@ -1,0 +1,58 @@
+{
+  "GET /health": {
+    "http_status": 200,
+    "body": {
+      "status": "HEALTHY",
+      "version": "1.0.0"
+    }
+  },
+  "GET /v1/services/status": {
+    "services": {
+      "fastapi": {
+        "name": "Aegis FastAPI Backend",
+        "port": 8000,
+        "online": true
+      },
+      "prometheus": {
+        "name": "Prometheus Metrics UI",
+        "port": 9091,
+        "online": false
+      },
+      "grafana": {
+        "name": "Grafana Dashboards",
+        "port": 3001,
+        "online": false
+      },
+      "postgres": {
+        "name": "PostgreSQL (pgvector)",
+        "port": 5435,
+        "online": false
+      },
+      "redis": {
+        "name": "Redis 7 Cache",
+        "port": 6382,
+        "online": false
+      },
+      "mlflow": {
+        "name": "MLflow Tracking Server",
+        "port": 5000,
+        "online": false
+      },
+      "airflow": {
+        "name": "Airflow Webserver",
+        "port": 8080,
+        "online": false
+      },
+      "pyspark": {
+        "name": "PySpark (Spark UI)",
+        "port": 4040,
+        "online": false
+      },
+      "helm": {
+        "name": "Helm Chart & GitOps",
+        "port": "ArgoCD",
+        "online": true
+      }
+    }
+  }
+}
