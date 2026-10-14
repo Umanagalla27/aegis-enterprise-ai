@@ -1,0 +1,245 @@
+{
+  "first_warmup_response": {
+    "service": "demo-checkout",
+    "status": "WARMING_UP",
+    "baseline_events": 1,
+    "events_needed": 20,
+    "anomaly_result": null
+  },
+  "last_warmup_response": {
+    "service": "demo-checkout",
+    "status": "WARMING_UP",
+    "baseline_events": 20,
+    "events_needed": 20,
+    "anomaly_result": null
+  },
+  "normal_45ms": {
+    "service": "demo-checkout",
+    "status": "SCORED",
+    "baseline_events": 21,
+    "anomaly_result": {
+      "is_anomaly": false,
+      "confidence": 0.19,
+      "detector_type": "Z_SCORE",
+      "severity": "NORMAL",
+      "metric_name": "latency_ms",
+      "observed_value": 45.0,
+      "baseline_mean": 42.85,
+      "details": {
+        "z_score": 1.11,
+        "threshold": 3.0
+      }
+    },
+    "per_metric": {
+      "cpu_percent": {
+        "is_anomaly": false,
+        "confidence": 0.01,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "cpu_percent",
+        "observed_value": 31.0,
+        "baseline_mean": 30.95,
+        "details": {
+          "z_score": 0.06,
+          "threshold": 3.0
+        }
+      },
+      "memory_percent": {
+        "is_anomaly": false,
+        "confidence": 0.0,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "memory_percent",
+        "observed_value": 40.0,
+        "baseline_mean": 40.0,
+        "details": {
+          "z_score": 0.0,
+          "threshold": 3.0
+        }
+      },
+      "latency_ms": {
+        "is_anomaly": false,
+        "confidence": 0.19,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "latency_ms",
+        "observed_value": 45.0,
+        "baseline_mean": 42.85,
+        "details": {
+          "z_score": 1.11,
+          "threshold": 3.0
+        }
+      }
+    }
+  },
+  "mild_70ms": {
+    "service": "demo-checkout",
+    "status": "SCORED",
+    "baseline_events": 21,
+    "anomaly_result": {
+      "is_anomaly": true,
+      "confidence": 1.0,
+      "detector_type": "Z_SCORE",
+      "severity": "CRITICAL",
+      "metric_name": "latency_ms",
+      "observed_value": 70.0,
+      "baseline_mean": 42.95,
+      "details": {
+        "z_score": 13.95,
+        "threshold": 3.0
+      }
+    },
+    "per_metric": {
+      "cpu_percent": {
+        "is_anomaly": false,
+        "confidence": 0.01,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "cpu_percent",
+        "observed_value": 31.0,
+        "baseline_mean": 30.95,
+        "details": {
+          "z_score": 0.06,
+          "threshold": 3.0
+        }
+      },
+      "memory_percent": {
+        "is_anomaly": false,
+        "confidence": 0.0,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "memory_percent",
+        "observed_value": 40.0,
+        "baseline_mean": 40.0,
+        "details": {
+          "z_score": 0.0,
+          "threshold": 3.0
+        }
+      },
+      "latency_ms": {
+        "is_anomaly": true,
+        "confidence": 1.0,
+        "detector_type": "Z_SCORE",
+        "severity": "CRITICAL",
+        "metric_name": "latency_ms",
+        "observed_value": 70.0,
+        "baseline_mean": 42.95,
+        "details": {
+          "z_score": 13.95,
+          "threshold": 3.0
+        }
+      }
+    }
+  },
+  "spike_2500ms": {
+    "service": "demo-checkout",
+    "status": "SCORED",
+    "baseline_events": 21,
+    "anomaly_result": {
+      "is_anomaly": true,
+      "confidence": 1.0,
+      "detector_type": "Z_SCORE",
+      "severity": "CRITICAL",
+      "metric_name": "latency_ms",
+      "observed_value": 2500.0,
+      "baseline_mean": 42.95,
+      "details": {
+        "z_score": 1267.19,
+        "threshold": 3.0
+      }
+    },
+    "per_metric": {
+      "cpu_percent": {
+        "is_anomaly": false,
+        "confidence": 0.01,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "cpu_percent",
+        "observed_value": 31.0,
+        "baseline_mean": 30.95,
+        "details": {
+          "z_score": 0.06,
+          "threshold": 3.0
+        }
+      },
+      "memory_percent": {
+        "is_anomaly": false,
+        "confidence": 0.0,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "memory_percent",
+        "observed_value": 40.0,
+        "baseline_mean": 40.0,
+        "details": {
+          "z_score": 0.0,
+          "threshold": 3.0
+        }
+      },
+      "latency_ms": {
+        "is_anomaly": true,
+        "confidence": 1.0,
+        "detector_type": "Z_SCORE",
+        "severity": "CRITICAL",
+        "metric_name": "latency_ms",
+        "observed_value": 2500.0,
+        "baseline_mean": 42.95,
+        "details": {
+          "z_score": 1267.19,
+          "threshold": 3.0
+        }
+      }
+    }
+  },
+  "invalid_payload": {
+    "http_status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "float_parsing",
+          "loc": [
+            "body",
+            "cpu_percent"
+          ],
+          "msg": "Input should be a valid number, unable to parse string as a number",
+          "input": "high"
+        },
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "memory_percent"
+          ],
+          "msg": "Field required",
+          "input": {
+            "service_name": "demo-checkout",
+            "cpu_percent": "high"
+          }
+        },
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "latency_ms"
+          ],
+          "msg": "Field required",
+          "input": {
+            "service_name": "demo-checkout",
+            "cpu_percent": "high"
+          }
+        },
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "status_code"
+          ],
+          "msg": "Field required",
+          "input": {
+            "service_name": "demo-checkout",
+            "cpu_percent": "high"
+          }
+        }
+      ]
+    }
+  }
+}

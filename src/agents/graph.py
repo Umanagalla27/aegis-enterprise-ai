@@ -2,6 +2,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from src.agents.incident_classifier import SEVERITY_BY_FAULT, classify_fault
 from src.agents.state import AegisAgentState, RemediationAction, TriageOutput
 from src.mcp.server import (
     execute_deployment_rollback,
@@ -23,27 +24,25 @@ def security_node(state: AegisAgentState) -> dict:
             "resolution_notes": f"QUARANTINED: {reason}",
         }
     sanitized = EnterprisePIIRedactor.redact(raw)
-    state["ticket"].description = sanitized.clean_text
-    return {"security_flagged": False}
+    # Return a new ticket instead of mutating the input state in place, so the
+    # checkpointer records the redacted version as a proper state update.
+    clean_ticket = state["ticket"].model_copy(update={"description": sanitized.clean_text})
+    return {"security_flagged": False, "ticket": clean_ticket}
 
 
 def triage_node(state: AegisAgentState) -> dict:
-    desc = state["ticket"].description.lower()
-    if "oom" in desc or "cuda" in desc or "critical" in desc:
+    desc = state["ticket"].description
+    fault = classify_fault(desc)
+    sev = SEVERITY_BY_FAULT[fault]
+    if "critical" in desc.lower():
         sev = "P1"
-        needs_approval = True
-    elif "timeout" in desc or "high latency" in desc:
-        sev = "P2"
-        needs_approval = True
-    else:
-        sev = "P3"
-        needs_approval = False
+    needs_approval = sev in ("P1", "P2")
 
     triage = TriageOutput(
         severity=sev,
-        category="infrastructure",
+        category=fault.lower(),
         requires_human_approval=needs_approval,
-        summary=f"Triaged as {sev} incident.",
+        summary=f"Triaged as {sev} incident (fault type: {fault}).",
     )
     return {"triage": triage}
 
@@ -56,17 +55,24 @@ def research_node(state: AegisAgentState) -> dict:
 
 
 def rca_node(state: AegisAgentState) -> dict:
-    desc = state["ticket"].description
-    if "oom" in desc.lower():
-        diagnosis = "Root Cause: Batch size allocation exceeded GPU memory limits."
-    else:
-        diagnosis = "Root Cause: Database connection pool saturation."
+    fault = classify_fault(state["ticket"].description)
+    diagnosis = {
+        "OOM_CRASH": "Root Cause: Batch size allocation exceeded GPU memory limits.",
+        "LATENCY_SPIKE": "Root Cause: Database connection pool saturation.",
+        "ERROR_BURST": "Root Cause: Recent deployment regression raising 5xx errors.",
+        "UNKNOWN": "Root Cause: Undetermined. Needs manual investigation.",
+    }[fault]
     return {"rca_diagnosis": diagnosis}
 
 
 def action_planning_node(state: AegisAgentState) -> dict:
     triage = state["triage"]
     action_type = "execute_deployment_rollback"
+
+    # Low-severity (P3) incidents never trigger an automated rollback. Previously
+    # every ticket, even an unclassified one, was rolled back without a human.
+    if triage.severity == "P3":
+        return {"actions": []}
 
     # Enforce role-based tool authorization
     if not ToolAccessController.authorize("action_agent", action_type):
@@ -109,7 +115,10 @@ def action_planning_node(state: AegisAgentState) -> dict:
 def execution_node(state: AegisAgentState) -> dict:
     actions = state.get("actions", [])
     if not actions:
-        return {"review_status": "resolved"}
+        return {
+            "review_status": "escalated",
+            "resolution_notes": "No automated remediation for this severity; routed to on-call.",
+        }
     latest = actions[-1].model_copy() if hasattr(actions[-1], "model_copy") else actions[-1].copy()
 
     if latest.status == "approved":

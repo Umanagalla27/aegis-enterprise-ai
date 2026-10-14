@@ -243,54 +243,44 @@ Navigate to **`http://localhost:8000`** in your browser to interact with the ful
 
 ## 🧪 Verification & Test Benchmarks
 
-### 1. Run Complete 17-Test Unit Suite (Phases 2 through 5)
-```bash
-pytest tests/ -v
-```
-**Results Summary**:
-```text
-tests/test_phase2.py::test_transformer_from_scratch PASSED               [  5%]
-tests/test_phase2.py::test_token_aware_chunking PASSED                   [ 11%]
-tests/test_phase2.py::test_topological_graph_rag PASSED                  [ 17%]
-tests/test_phase2.py::test_query_rewriting PASSED                        [ 23%]
-tests/test_phase2.py::test_hybrid_retriever_index_and_search PASSED      [ 29%]
-tests/test_phase3.py::test_pii_redaction PASSED                          [ 35%]
-tests/test_phase3.py::test_injection_defense PASSED                      [ 41%]
-tests/test_phase3.py::test_tool_access_controller PASSED                 [ 47%]
-tests/test_phase3.py::test_langgraph_hitl_execution_flow PASSED          [ 52%]
-tests/test_phase4.py::test_kafka_producer_validation_and_dlq PASSED      [ 58%]
-tests/test_phase4.py::test_kafka_consumer_lag_and_offsets PASSED         [ 64%]
-tests/test_phase4.py::test_spark_batch_aggregator PASSED                 [ 70%]
-tests/test_phase4.py::test_dbt_models_and_runner PASSED                  [ 76%]
-tests/test_phase4.py::test_airflow_sla_gates PASSED                      [ 82%]
-tests/test_phase5.py::test_anomaly_detection_zscore_and_isolation_forest PASSED [ 88%]
-tests/test_phase5.py::test_rca_agent_diagnosis_and_correlation PASSED    [ 94%]
-tests/test_phase5.py::test_fastapi_endpoints_and_prometheus_metrics PASSED [100%]
+> A full run of every component with its real output, plus the bugs found and fixed,
+> is documented in **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)**. Raw outputs are in
+> [`docs/outputs/`](docs/outputs/).
 
-======================= 17 passed in 112.81s ========================
+### 1. Run every component and save outputs
+```bash
+python scripts/run_full_demo.py      # writes docs/outputs/*.json and DEMO_OUTPUT.txt
 ```
 
-### 2. Run Continuous Evaluation Quality Gates
+### 2. Unit, regression and evaluation-gate tests
 ```bash
-pytest eval/test_eval_gates.py -v
+pytest tests/ eval/test_eval_gates.py -v
 ```
-* **RAGAS Faithfulness**: $\ge 0.85$ (Passed)
-* **RAGAS Context Recall**: $\ge 0.80$ (Passed)
-* **Multi-Agent 50-Scenario Tool Accuracy**: $\ge 90.0\%$ (Passed)
-* **HITL Security Compliance**: $100.0\%$ (Passed)
+Evaluation gates now report measured values instead of fixed numbers:
+* **RAGAS-style gate** (lexical-overlap proxy, Faithfulness ≥ 0.85, Recall ≥ 0.80): passes a grounded answer, rejects a hallucinated one.
+* **Multi-agent benchmark**: runs the LangGraph workflow on 50 labelled scenarios. Current result: 90% routing accuracy, 90% HITL compliance. The keyword triage misses "sluggish" as a latency symptom; this is tracked as an `xfail` test.
+* **Safety invariant**: no scenario executes a rollback without human approval (passes).
 
-### 3. Run 20-Fault Chaos Engineering Suite
+### 3. 20-fault chaos suite with 10 healthy controls
 ```bash
-python eval/run_aiops_eval.py
+python eval/run_aiops_eval.py        # exits 1 if any gate fails
 ```
-```text
-================================================================================
-CHAOS EVALUATION SUMMARY:
-  Total Injected Faults:   20
-  Fault Detection Rate:    100.0%
-  RCA Triage Accuracy:     100.0%
-================================================================================
+Reports detection rate, RCA runbook accuracy and false-positive rate.
+
+### 4. Agent workflow with Human-in-the-Loop over HTTP
+```bash
+curl -X POST localhost:8000/v1/agent/incidents -H "Content-Type: application/json" \
+  -d '{"service_name":"rag-retrieval","description":"CUDA Out of Memory crash"}'
+# -> status AWAITING_APPROVAL, thread_id inc-...
+curl -X POST localhost:8000/v1/agent/incidents/<thread_id>/decision \
+  -H "Content-Type: application/json" -d '{"approved":true,"reviewer":"Uma_SRE"}'
 ```
+
+### Implementation status
+
+| Real | Simulated / stub |
+| :--- | :--- |
+| FastAPI, Pydantic, Prometheus metrics, LangGraph HITL state machine, BM25 + RRF retrieval, NetworkX blast radius, Z-score + Isolation Forest, dbt SQL on SQLite | Kafka and Spark (in-memory Python/pandas), vLLM and MLflow (stubs), rollback tool, regex PII/injection checks (not Presidio), word-overlap "dense" score (no embeddings), no LLM calls, Terraform/Helm/ArgoCD not applied |
 
 ---
 

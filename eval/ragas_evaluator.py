@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,25 @@ class EnterpriseRagasEvaluator:
         self.min_faithfulness = min_faithfulness
         self.min_recall = min_recall
 
+    # Common words that carry no meaning for grounding checks.
+    STOPWORDS = frozenset(
+        "a an the is are was were be been of for to in on at by with and or "
+        "what which when who how does do did this that it its as from must should can will".split()
+    )
+
+    @staticmethod
+    def _stem(word: str) -> str:
+        """Very small suffix stripper so "requires"/"require" and "alerts"/"alert" match."""
+        for suffix in ("ing", "ed", "es", "s"):
+            if len(word) > 4 and word.endswith(suffix):
+                return word[: -len(suffix)]
+        return word
+
+    @classmethod
+    def _content_words(cls, text: str) -> set[str]:
+        words = re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", text.lower())
+        return {cls._stem(w) for w in words if w not in cls.STOPWORDS}
+
     def evaluate_sample(
         self,
         query: str,
@@ -37,26 +57,31 @@ class EnterpriseRagasEvaluator:
         generated_answer: str,
         ground_truth: str,
     ) -> dict[str, float]:
-        """Evaluates a single query/response tuple against ground truth."""
-        # Check context overlap with answer
-        context_words = set(" ".join(retrieved_contexts).lower().split())
-        answer_words = set(generated_answer.lower().split())
-        truth_words = set(ground_truth.lower().split())
+        """Scores one query/answer pair with lexical-overlap proxies for the RAGAS metrics.
 
-        overlap_answer_ctx = len(answer_words & context_words) / max(1, len(answer_words))
-        overlap_ctx_truth = len(truth_words & context_words) / max(1, len(truth_words))
+        These are word-overlap approximations, not the LLM-judged RAGAS library metrics.
+        Scores are reported as computed. (An earlier version clamped them with
+        max(0.85, ...), which made the gate impossible to fail.)
+        """
+        context_words = self._content_words(" ".join(retrieved_contexts))
+        answer_words = self._content_words(generated_answer)
+        truth_words = self._content_words(ground_truth)
 
-        faithfulness = round(min(1.0, overlap_answer_ctx * 1.3), 3)
-        context_recall = round(min(1.0, overlap_ctx_truth * 1.2), 3)
-        relevance_ratio = len(answer_words & truth_words) / max(1, len(truth_words)) * 1.4
-        answer_relevance = round(min(1.0, relevance_ratio), 3)
-        context_precision = 0.92
+        # Faithfulness: share of the answer's words that are supported by the context.
+        faithfulness = len(answer_words & context_words) / max(1, len(answer_words))
+        # Context recall: share of the ground truth that the retrieved context covers.
+        context_recall = len(truth_words & context_words) / max(1, len(truth_words))
+        # Answer relevance: share of the ground truth that the answer actually states.
+        answer_relevance = len(answer_words & truth_words) / max(1, len(truth_words))
+        # Context precision: share of retrieved contexts that contain ground-truth words.
+        useful = sum(1 for c in retrieved_contexts if self._content_words(c) & truth_words)
+        context_precision = useful / max(1, len(retrieved_contexts))
 
         return {
-            "faithfulness": max(0.85, faithfulness),
-            "context_recall": max(0.82, context_recall),
-            "answer_relevance": max(0.88, answer_relevance),
-            "context_precision": context_precision,
+            "faithfulness": round(faithfulness, 3),
+            "context_recall": round(context_recall, 3),
+            "answer_relevance": round(answer_relevance, 3),
+            "context_precision": round(context_precision, 3),
         }
 
     def evaluate_dataset(self, test_samples: list[dict[str, Any]]) -> RagasMetricScore:

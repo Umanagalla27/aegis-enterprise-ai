@@ -1,0 +1,99 @@
+{
+  "baseline_stats": {
+    "latency_ms": {
+      "mean": 42.21504362696467,
+      "std": 5.744971193703906
+    },
+    "cpu_percent": {
+      "mean": 29.46110262729163,
+      "std": 4.211353572422523
+    },
+    "memory_percent": {
+      "mean": 45.47507020330908,
+      "std": 2.7138788992575913
+    }
+  },
+  "results": {
+    "healthy": {
+      "zscore_latency": {
+        "is_anomaly": false,
+        "confidence": 0.05,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "latency_ms",
+        "observed_value": 44,
+        "baseline_mean": 42.22,
+        "details": {
+          "z_score": 0.31,
+          "threshold": 3.0
+        }
+      },
+      "isolation_forest": {
+        "is_anomaly": false,
+        "confidence": 0.4,
+        "detector_type": "ISOLATION_FOREST",
+        "severity": "NORMAL",
+        "metric_name": "multivariate_telemetry",
+        "observed_value": 44,
+        "baseline_mean": 42.21504362696467,
+        "details": {
+          "anomaly_score": -0.4008
+        }
+      }
+    },
+    "memory_leak_only": {
+      "zscore_latency": {
+        "is_anomaly": false,
+        "confidence": 0.14,
+        "detector_type": "Z_SCORE",
+        "severity": "NORMAL",
+        "metric_name": "latency_ms",
+        "observed_value": 47,
+        "baseline_mean": 42.22,
+        "details": {
+          "z_score": 0.83,
+          "threshold": 3.0
+        }
+      },
+      "isolation_forest": {
+        "is_anomaly": false,
+        "confidence": 0.56,
+        "detector_type": "ISOLATION_FOREST",
+        "severity": "NORMAL",
+        "metric_name": "multivariate_telemetry",
+        "observed_value": 47,
+        "baseline_mean": 42.21504362696467,
+        "details": {
+          "anomaly_score": -0.5621
+        }
+      }
+    },
+    "latency_spike": {
+      "zscore_latency": {
+        "is_anomaly": true,
+        "confidence": 1.0,
+        "detector_type": "Z_SCORE",
+        "severity": "CRITICAL",
+        "metric_name": "latency_ms",
+        "observed_value": 900,
+        "baseline_mean": 42.22,
+        "details": {
+          "z_score": 149.31,
+          "threshold": 3.0
+        }
+      },
+      "isolation_forest": {
+        "is_anomaly": true,
+        "confidence": 0.58,
+        "detector_type": "ISOLATION_FOREST",
+        "severity": "WARNING",
+        "metric_name": "multivariate_telemetry",
+        "observed_value": 900,
+        "baseline_mean": 42.21504362696467,
+        "details": {
+          "anomaly_score": -0.5825
+        }
+      }
+    }
+  }
+}
