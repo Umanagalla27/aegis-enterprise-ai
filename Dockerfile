@@ -9,7 +9,8 @@ WORKDIR /build
 COPY requirements-prod.txt .
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install -r requirements-prod.txt
+    && /opt/venv/bin/pip install -r requirements-prod.txt \
+    && /opt/venv/bin/python -m pip uninstall -y pip
 
 # ---- Stage 2: minimal runtime image ----
 FROM python:3.12-slim AS runtime
@@ -20,9 +21,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
     WEB_CONCURRENCY=2
 
-# Unprivileged user: a container escape or RCE does not land as root
+# Unprivileged user: a container escape or RCE does not land as root.
+# pip is removed: the service never installs packages at runtime, and pip's vendored
+# libraries (urllib3, msgpack, setuptools) are flagged by image scanners.
 RUN groupadd --system --gid 10001 aegis \
-    && useradd --system --uid 10001 --gid aegis --no-create-home aegis
+    && useradd --system --uid 10001 --gid aegis --no-create-home aegis \
+    && rm -rf /usr/local/lib/python3.12/site-packages/pip* /usr/local/bin/pip*
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
