@@ -68,6 +68,8 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 256Mi
         - name: data
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 512Mi
