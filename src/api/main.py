@@ -1,5 +1,8 @@
+import os
 import socket
+import threading
 import time
+from collections import deque
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,17 +29,28 @@ app = FastAPI(
     description="Unified Enterprise GenAI & AIOps Platform",
 )
 
-# CORS
+# CORS: comma-separated allowlist from the environment. Browsers reject a wildcard origin
+# combined with credentials, so credentials are only enabled for an explicit allowlist.
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials="*" not in CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 anomaly_engine = HybridAnomalyEngine()
 rca_agent = RootCauseAnalysisAgent()
+
+# Rolling baseline for /v1/telemetry/ingest: the engine is refitted on recent non-anomalous
+# events so that Z-scores are computed against real traffic instead of an empty baseline.
+BASELINE_MIN_EVENTS = 30
+BASELINE_REFIT_EVERY = 50
+_baseline_window: deque[dict] = deque(maxlen=1000)
+_baseline_lock = threading.Lock()
+_events_since_fit = 0
 
 # Pre-populate RAG runbooks for instant interactive testing
 if not retriever.documents:
@@ -72,18 +86,23 @@ if not retriever.documents:
 # OpenTelemetry & Prometheus Middleware
 @app.middleware("http")
 async def monitor_requests(request: Request, call_next):
-    start_time = time.time()
+    start_time = time.perf_counter()
     response = await call_next(request)
-    duration = time.time() - start_time
+    duration = time.perf_counter() - start_time
+
+    # Label by route template, not the raw URL, so unknown paths (scanners, typos) cannot
+    # create an unbounded number of Prometheus time series.
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", "unmatched")
 
     HTTP_REQUESTS_TOTAL.labels(
         method=request.method,
-        endpoint=request.url.path,
+        endpoint=endpoint,
         status_code=response.status_code,
     ).inc()
 
     HTTP_REQUEST_DURATION_SECONDS.labels(
-        endpoint=request.url.path,
+        endpoint=endpoint,
     ).observe(duration)
 
     return response
@@ -190,7 +209,17 @@ def get_services_status():
 
 @app.post("/v1/telemetry/ingest")
 def ingest_telemetry(event: TelemetryEvent):
+    global _events_since_fit
+
     res = anomaly_engine.detect_zscore("latency_ms", event.latency_ms)
+    if not res.is_anomaly:
+        with _baseline_lock:
+            _baseline_window.append(event.model_dump())
+            _events_since_fit += 1
+            needs_fit = not anomaly_engine.is_fitted or _events_since_fit >= BASELINE_REFIT_EVERY
+            if needs_fit and len(_baseline_window) >= BASELINE_MIN_EVENTS:
+                anomaly_engine.fit_baseline(list(_baseline_window))
+                _events_since_fit = 0
     return {"service": event.service_name, "anomaly_result": res}
 
 
@@ -216,8 +245,7 @@ def search_rag(req: RAGQueryRequest):
     return {
         "query": req.query,
         "results": [
-            {"chunk_id": h.chunk_id, "text": h.text, "score": round(h.score, 4)}
-            for h in hits
+            {"chunk_id": h.chunk_id, "text": h.text, "score": round(h.score, 4)} for h in hits
         ],
     }
 
@@ -366,4 +394,3 @@ def trigger_spark_aggregation():
         "records_processed": len(sample_records),
         "aggregated_metrics": summary_df.to_dict(orient="records"),
     }
-

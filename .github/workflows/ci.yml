@@ -5,6 +5,14 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/aegis-enterprise-ai
 
 jobs:
   lint-and-test:
@@ -73,3 +81,65 @@ jobs:
 
       - name: Run 20-Fault Chaos Engineering Evaluation
         run: python eval/run_aiops_eval.py
+
+  build-and-push-image:
+    name: Build, Scan & Push Container Image
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: aegis-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke Test Container
+        run: |
+          docker run -d --name aegis --read-only --tmpfs /tmp \
+            --tmpfs /app/data:uid=10001,gid=10001 -p 8000:8000 aegis-api:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          docker logs aegis
+          exit 1
+
+      - name: Scan Image for Vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: aegis-api:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag & Push Image
+        if: github.event_name != 'pull_request'
+        run: |
+          IMAGE="${IMAGE_NAME,,}"
+          docker tag aegis-api:ci "$IMAGE:${GITHUB_SHA::7}"
+          docker push "$IMAGE:${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            docker tag aegis-api:ci "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi

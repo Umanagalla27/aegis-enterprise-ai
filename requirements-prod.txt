@@ -1,0 +1,15 @@
+# Runtime dependencies for the FastAPI service image (see Dockerfile).
+# requirements.txt keeps the full research/dev stack (torch, transformers, langchain, ...);
+# none of those are imported by src.api.main, and shipping them adds several GB to the image.
+fastapi>=0.115.0,<1.0
+uvicorn[standard]>=0.30.0,<1.0
+gunicorn>=22.0.0,<24.0
+pydantic>=2.8.0,<3.0
+mcp>=1.0.0,<2.0
+rank-bm25>=0.2.2,<0.3
+networkx>=3.3,<4.0
+numpy>=1.26.0,<3.0
+pandas>=2.2.0,<3.0
+pyarrow>=17.0.0
+scikit-learn>=1.5.0,<2.0
+prometheus-client>=0.20.0,<1.0

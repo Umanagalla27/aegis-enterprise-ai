@@ -70,6 +70,9 @@ class HybridAnomalyEngine:
 
     def detect_zscore(self, metric_name: str, value: float) -> AnomalyResult:
         """Fast statistical Z-score anomaly check."""
+        # Without a fitted baseline the value is compared against itself (z = 0), so the
+        # result carries baseline_ready=False instead of silently reporting NORMAL.
+        baseline_ready = metric_name in self.baseline_stats
         stats = self.baseline_stats.get(metric_name, {"mean": value, "std": 1.0})
         std = stats.get("std", 1.0) or 1.0
         z = (value - stats["mean"]) / std
@@ -87,7 +90,11 @@ class HybridAnomalyEngine:
             metric_name=metric_name,
             observed_value=round(value, 2),
             baseline_mean=round(stats["mean"], 2),
-            details={"z_score": round(z, 2), "threshold": self.z_threshold},
+            details={
+                "z_score": round(z, 2),
+                "threshold": self.z_threshold,
+                "baseline_ready": baseline_ready,
+            },
         )
 
     def detect_multivariate(self, event: dict[str, Any]) -> AnomalyResult:

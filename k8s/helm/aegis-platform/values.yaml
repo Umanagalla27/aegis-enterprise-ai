@@ -1,9 +1,30 @@
 replicaCount: 3
 
 image:
-  repository: aegis-enterprise-ai
+  # Pushed by .github/workflows/ci.yml; CI pins the tag to the commit SHA
+  repository: ghcr.io/umanagalla27/aegis-enterprise-ai
   pullPolicy: IfNotPresent
   tag: "1.0.0"
+
+imagePullSecrets: []
+
+env:
+  CORS_ORIGINS: "https://api.aegis.enterprise.ai"
+  WEB_CONCURRENCY: "2"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
 
 service:
   type: ClusterIP
@@ -21,6 +42,11 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
+  # cert-manager only issues a certificate when the Ingress has a tls block
+  tls:
+    - secretName: aegis-api-tls
+      hosts:
+        - api.aegis.enterprise.ai
 
 resources:
   limits:

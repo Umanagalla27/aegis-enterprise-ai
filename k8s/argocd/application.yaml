@@ -8,8 +8,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/UmaNagallaa/aegis-enterprise-ai.git'
-    targetRevision: HEAD
+    repoURL: 'https://github.com/Umanagalla27/aegis-enterprise-ai.git'
+    targetRevision: main
     path: k8s/helm/aegis-platform
     helm:
       valueFiles:

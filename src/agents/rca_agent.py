@@ -47,16 +47,17 @@ class RootCauseAnalysisAgent:
         recent_logs = recent_logs or []
         recent_commits = recent_commits or []
 
-        # 1. Filter relevant error logs
+        # 1. Filter error logs emitted by the affected service only
         error_logs = [
             f"[{log.get('level', 'ERROR')}] {log.get('message', '')}"
             for log in recent_logs
-            if log.get("service") == service_name or log.get("level") in ("ERROR", "CRITICAL")
+            if log.get("service", service_name) == service_name
+            and log.get("level", "ERROR") in ("ERROR", "CRITICAL")
         ]
 
-        # 2. Correlate recent git commits
+        # 2. Correlate recent git commits (untagged commits are kept as candidates)
         culprit_commits = [
-            c for c in recent_commits if service_name in c.get("service", service_name)
+            c for c in recent_commits if c.get("service", service_name) == service_name
         ]
 
         # 3. Determine incident severity
