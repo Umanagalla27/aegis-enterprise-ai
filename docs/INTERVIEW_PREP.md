@@ -92,7 +92,7 @@ These are real, reproducible and fixed on this branch. Tell them as **Situation,
 
 ```python
 # Before: detect_zscore with an empty baseline
-stats = self.baseline_stats.get(metric_name, {"mean": value, "std": 1.0})   # mean == value -> z == 0
+stats = self.baseline_stats.get(metric_name, {"mean": value, "std": 1.0})  # mean == value -> z == 0
 # After: explicit readiness flag + API-side rolling baseline
 baseline_ready = metric_name in self.baseline_stats
 ```
