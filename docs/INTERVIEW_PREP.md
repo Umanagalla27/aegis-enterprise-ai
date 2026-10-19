@@ -86,7 +86,7 @@ These are real, reproducible and fixed on this branch. Tell them as **Situation,
 
 - **Situation:** `POST /v1/telemetry/ingest` with `latency_ms: 999999` returned `severity: NORMAL`.
 - **Root cause:** the API created `HybridAnomalyEngine()` but never called `fit_baseline()`. With no baseline, `detect_zscore` used the value itself as the mean: `z = (value - value) / 1 = 0`. Unit tests passed because they fitted the engine manually; **the integration path was untested**.
-- **Action:** added a rolling baseline in `src/api/main.py`. It keeps non-anomalous events in a `deque(maxlen=1000)`, fits after 30 events and refits every 50 under a lock. The engine now returns `baseline_ready: false` instead of a silent `NORMAL`. Added a regression test.
+- **Action:** `src/api/main.py` now keeps a rolling baseline **per service** (`deque(maxlen=500)`). The first 20 events only build the baseline and the response says `WARMING_UP` instead of a silent `NORMAL`. After that, latency, CPU and memory are each scored against that service's own history, and anomalous events are kept out of the window so a spike cannot poison the baseline. The engine also reports `baseline_ready: false` if it is ever called without a baseline. Regression tests cover it.
 - **Result:** a spike after warm-up returns `is_anomaly: true, severity: CRITICAL (z = 442)`.
 - **Lesson:** *"Unit tests passing doesn't mean the feature works. Test the real entry point. And never fail silently: surface 'I don't know yet'."*
 
@@ -130,7 +130,7 @@ baseline_ready = metric_name in self.baseline_stats
 
 ### Bug 8: CORS misconfiguration
 
-- `allow_origins=["*"]` with `allow_credentials=True` is a combination browsers reject for credentialed requests, and it is a security smell. Origins now come from `CORS_ORIGINS`; credentials are only enabled for an explicit allowlist.
+- `allow_origins=["*"]` with `allow_credentials=True` is a combination browsers reject for credentialed requests, and it is a security smell. Origins now come from `AEGIS_CORS_ORIGINS` (default `http://localhost:8000`), and credentials are disabled.
 
 ### Bug 9: Prometheus could not scrape the API on Linux
 
@@ -233,7 +233,7 @@ Yes, Bug 2 above.
 `async def` handlers run on the event loop: blocking calls in them (CPU work, `time.sleep`, sync DB drivers) freeze all requests. Plain `def` handlers run in a threadpool (which is why this project's CPU-bound handlers are `def`). Very heavy work belongs in background workers.
 
 **Q: Is your rolling baseline thread-safe?**
-`deque.append` is atomic, but the read-modify-write of the counter and the refit are guarded by a `threading.Lock`, because sync endpoints run concurrently in the threadpool. It is not shared across processes; that would need Redis.
+Within one process, mostly: `deque.append` with `maxlen` is atomic, and each request fits a fresh engine from a snapshot of the history, so there is no shared model to corrupt. Two concurrent requests can read slightly different windows, which is acceptable for a statistical baseline. It is **not** shared across processes or pods (each gunicorn worker learns its own), which would need Redis.
 
 **Q: What does Pydantic give you here?**
 Request validation and automatic 422 errors with field-level messages, type coercion, OpenAPI schema generation, and in the Kafka producer, schema enforcement that routes bad events to the DLQ.
@@ -246,4 +246,4 @@ Request validation and automatic 422 errors with field-level messages, type coer
 2. Set the readiness probe path to `/healthz`, deploy, and watch the Service lose endpoints (`kubectl get endpoints`). Explain the 503.
 3. Set `resources.limits.memory: 64Mi` and watch `OOMKilled`.
 4. Revert the cardinality fix locally, hit 1,000 random URLs, and look at `/metrics` size before and after.
-5. Run the warm-up `curl` loop from deployment guide Phase 1.5 and explain why the 31st request is the first one with `baseline_ready: true`.
+5. Run the warm-up `curl` loop from deployment guide Phase 1.5 and explain why the 21st request for a service is the first one with `"status": "SCORED"`.

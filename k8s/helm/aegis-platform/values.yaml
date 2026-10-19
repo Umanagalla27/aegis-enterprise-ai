@@ -9,7 +9,7 @@ image:
 imagePullSecrets: []
 
 env:
-  CORS_ORIGINS: "https://api.aegis.enterprise.ai"
+  AEGIS_CORS_ORIGINS: "https://api.aegis.enterprise.ai"
   WEB_CONCURRENCY: "2"
 
 podSecurityContext:

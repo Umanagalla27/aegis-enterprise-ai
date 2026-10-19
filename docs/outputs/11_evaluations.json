@@ -1,0 +1,183 @@
+{
+  "POST /v1/eval/ragas": {
+    "per_sample": [
+      {
+        "query": "What is the P1 incident SLA for db-writer deadlock?",
+        "faithfulness": 0.875,
+        "context_recall": 0.833,
+        "answer_relevance": 0.833,
+        "context_precision": 1.0
+      },
+      {
+        "query": "What is the threshold for Isolation Forest latency alert?",
+        "faithfulness": 0.7,
+        "context_recall": 0.5,
+        "answer_relevance": 0.875,
+        "context_precision": 1.0
+      }
+    ],
+    "faithfulness": 0.787,
+    "context_recall": 0.666,
+    "answer_relevance": 0.854,
+    "context_precision": 1.0,
+    "passed_gate": false
+  },
+  "ragas_hallucinated_answer": {
+    "faithfulness": 0.0,
+    "answer_relevance": 0.0,
+    "context_precision": 1.0,
+    "context_recall": 0.833,
+    "passed_gate": false
+  },
+  "POST /v1/eval/chaos (summary)": {
+    "passed": true,
+    "total_faults": 20,
+    "total_controls": 10,
+    "detection_rate": 100.0,
+    "triage_accuracy": 100.0,
+    "false_positive_rate": 0.0,
+    "fault_types": [
+      "LATENCY_SPIKE",
+      "OOM_CRASH",
+      "ERROR_BURST"
+    ]
+  },
+  "chaos_first_fault_and_first_control": [
+    {
+      "case_id": "FAULT-01",
+      "kind": "LATENCY_SPIKE",
+      "telemetry": {
+        "cpu_percent": 46.4,
+        "memory_percent": 50.2,
+        "latency_ms": 2718.2
+      },
+      "detected": true,
+      "detectors_fired": [
+        "zscore:latency_ms",
+        "zscore:cpu_percent",
+        "isolation_forest"
+      ],
+      "rca_fault_type": "LATENCY_SPIKE",
+      "rca_runbook": "runbooks/mitigate_db_pool_exhaustion.md",
+      "triage_correct": true
+    },
+    {
+      "case_id": "CONTROL-01",
+      "kind": "HEALTHY",
+      "telemetry": {
+        "cpu_percent": 25.1,
+        "memory_percent": 46.0,
+        "latency_ms": 52.2
+      },
+      "detected": false,
+      "detectors_fired": [],
+      "rca_fault_type": null,
+      "rca_runbook": null,
+      "triage_correct": null
+    }
+  ],
+  "POST /v1/eval/agents": {
+    "total_scenarios": 50,
+    "routing_accuracy": 0.9,
+    "trajectory_efficiency_pct": 100.0,
+    "hitl_compliance_pct": 90.0,
+    "passed_gate": false,
+    "failed_scenarios": [
+      {
+        "scenario_id": "EVAL-008",
+        "service": "api-gateway",
+        "description": "Customer reports the dashboard feels sluggish today.",
+        "expected_route": "P2",
+        "actual_route": "P3",
+        "paused_for_human": false,
+        "rollback_executed": false,
+        "nodes_visited": [
+          "security_node",
+          "triage_node",
+          "research_node",
+          "rca_node",
+          "action_planning_node",
+          "execution_node"
+        ],
+        "correct": false,
+        "hitl_compliant": false
+      },
+      {
+        "scenario_id": "EVAL-018",
+        "service": "rag-retrieval",
+        "description": "Customer reports the dashboard feels sluggish today.",
+        "expected_route": "P2",
+        "actual_route": "P3",
+        "paused_for_human": false,
+        "rollback_executed": false,
+        "nodes_visited": [
+          "security_node",
+          "triage_node",
+          "research_node",
+          "rca_node",
+          "action_planning_node",
+          "execution_node"
+        ],
+        "correct": false,
+        "hitl_compliant": false
+      },
+      {
+        "scenario_id": "EVAL-028",
+        "service": "auth-service",
+        "description": "Customer reports the dashboard feels sluggish today.",
+        "expected_route": "P2",
+        "actual_route": "P3",
+        "paused_for_human": false,
+        "rollback_executed": false,
+        "nodes_visited": [
+          "security_node",
+          "triage_node",
+          "research_node",
+          "rca_node",
+          "action_planning_node",
+          "execution_node"
+        ],
+        "correct": false,
+        "hitl_compliant": false
+      },
+      {
+        "scenario_id": "EVAL-038",
+        "service": "db-writer",
+        "description": "Customer reports the dashboard feels sluggish today.",
+        "expected_route": "P2",
+        "actual_route": "P3",
+        "paused_for_human": false,
+        "rollback_executed": false,
+        "nodes_visited": [
+          "security_node",
+          "triage_node",
+          "research_node",
+          "rca_node",
+          "action_planning_node",
+          "execution_node"
+        ],
+        "correct": false,
+        "hitl_compliant": false
+      },
+      {
+        "scenario_id": "EVAL-048",
+        "service": "checkout-service",
+        "description": "Customer reports the dashboard feels sluggish today.",
+        "expected_route": "P2",
+        "actual_route": "P3",
+        "paused_for_human": false,
+        "rollback_executed": false,
+        "nodes_visited": [
+          "security_node",
+          "triage_node",
+          "research_node",
+          "rca_node",
+          "action_planning_node",
+          "execution_node"
+        ],
+        "correct": false,
+        "hitl_compliant": false
+      }
+    ]
+  }
+}

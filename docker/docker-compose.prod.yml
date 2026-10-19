@@ -9,7 +9,7 @@ services:
       - /tmp
       - /app/data:uid=10001,gid=10001
     environment:
-      CORS_ORIGINS: ${CORS_ORIGINS}
+      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS}
       WEB_CONCURRENCY: "2"
     deploy:
       resources:

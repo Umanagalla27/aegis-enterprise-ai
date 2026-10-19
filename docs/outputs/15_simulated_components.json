@@ -1,0 +1,25 @@
+{
+  "vllm_generate('What is 2+2?')": {
+    "text": "{\"category\": \"access_control\", \"urgency\": \"high\", \"tool\": \"grant_temporary_access\"}",
+    "tokens_generated": 22,
+    "latency_ms": 12.4,
+    "engine": "vLLM-PagedAttention-AWQ"
+  },
+  "vllm_generate('Restart the database')": {
+    "text": "{\"category\": \"access_control\", \"urgency\": \"high\", \"tool\": \"grant_temporary_access\"}",
+    "tokens_generated": 22,
+    "latency_ms": 12.4,
+    "engine": "vLLM-PagedAttention-AWQ"
+  },
+  "note": "Both prompts return the same hard-coded JSON: no model is loaded.",
+  "mlflow_tracker_storage": "dict",
+  "mlflow_run": {
+    "params": {
+      "top_k": 2
+    },
+    "metrics": {
+      "faithfulness": 0.81
+    },
+    "tags": {}
+  }
+}

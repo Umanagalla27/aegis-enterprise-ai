@@ -1,0 +1,38 @@
+{
+  "aegis-postgres": {
+    "service": "aegis-postgres",
+    "dependencies": [],
+    "blast_radius": [
+      "db-writer",
+      "api-gateway",
+      "auth-service",
+      "rag-retrieval"
+    ]
+  },
+  "api-gateway": {
+    "service": "api-gateway",
+    "dependencies": [
+      "db-writer",
+      "aegis-redis",
+      "auth-service",
+      "aegis-postgres",
+      "rag-retrieval"
+    ],
+    "blast_radius": []
+  },
+  "auth-service": {
+    "service": "auth-service",
+    "dependencies": [
+      "db-writer",
+      "aegis-postgres"
+    ],
+    "blast_radius": [
+      "api-gateway"
+    ]
+  },
+  "unknown-svc": {
+    "service": "unknown-svc",
+    "dependencies": [],
+    "blast_radius": []
+  }
+}

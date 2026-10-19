@@ -28,9 +28,21 @@ class RemediationAction(BaseModel):
 def append_remediations(
     existing: list[RemediationAction] | None, new: list[RemediationAction]
 ) -> list[RemediationAction]:
-    if existing is None:
-        return new
-    return existing + new
+    """Appends new actions, but updates an action in place when the same action
+    (same type and parameters) comes back with a new status.
+
+    Previously the execution node's status update was appended as a second copy, so an
+    approved rollback appeared twice (approved + executed) and a rejection twice.
+    """
+    merged = list(existing or [])
+    for action in new:
+        for i, old in enumerate(merged):
+            if (old.action_type, old.parameters) == (action.action_type, action.parameters):
+                merged[i] = action
+                break
+        else:
+            merged.append(action)
+    return merged
 
 
 class AegisAgentState(TypedDict):

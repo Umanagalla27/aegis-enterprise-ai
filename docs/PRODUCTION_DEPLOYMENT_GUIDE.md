@@ -45,7 +45,7 @@ Companion document: [INTERVIEW_PREP.md](INTERVIEW_PREP.md) (resume bullets, proj
 | **Immutable tag** | Tag images with the git commit SHA, never only `latest`, so you know exactly what is running and can roll back | CI pushes `:<sha>` (plus `:latest` on `main`) |
 | **Infrastructure as Code (IaC)** | Servers, networks and budgets defined in files and reviewed like code | `terraform/` |
 | **GitOps** | Git is the source of truth for what runs; a controller (ArgoCD) syncs the cluster to Git | `k8s/argocd/application.yaml` |
-| **12-Factor config** | Config comes from environment variables, never hard-coded | `CORS_ORIGINS`, `WEB_CONCURRENCY`, `PORT` |
+| **12-Factor config** | Config comes from environment variables, never hard-coded | `AEGIS_CORS_ORIGINS`, `WEB_CONCURRENCY`, `PORT` |
 
 **Interview line:** *"We build one immutable image per commit in CI, scan it, push it to a registry, and promote that exact image from staging to prod. Config differs per environment through env vars and secrets; the code does not."*
 
@@ -123,7 +123,7 @@ curl -X POST localhost:8000/v1/incidents/diagnose -H "content-type: application/
           "recent_commits":[{"commit_hash":"a1b2c3d","author":"dev","message":"tune HNSW","service":"rag-retrieval"}]}'
 ```
 
-**Anomaly detection warm-up:** `/v1/telemetry/ingest` learns a rolling baseline. The first 30 non-anomalous events return `"baseline_ready": false`. After that, a spike is flagged:
+**Anomaly detection warm-up:** `/v1/telemetry/ingest` learns a rolling baseline **per service**. The first 20 events for a service return `"status": "WARMING_UP"`. After that, every metric (latency, CPU, memory) is scored and a spike is flagged:
 
 ```bash
 for i in $(seq 1 35); do
@@ -132,7 +132,7 @@ for i in $(seq 1 35); do
 done
 curl -s -X POST localhost:8000/v1/telemetry/ingest -H "content-type: application/json" \
   -d '{"service_name":"api-gateway","cpu_percent":40,"memory_percent":50,"latency_ms":2500,"status_code":200}'
-# -> "is_anomaly": true, "severity": "CRITICAL"
+# -> "status": "SCORED", "anomaly_result": {"is_anomaly": true, "severity": "CRITICAL", ...}
 ```
 
 > The baseline lives in process memory. Under gunicorn with `WEB_CONCURRENCY=2` (the Docker image), each worker learns its own baseline, so warm-up takes about twice as many events. This is a known limitation; the fix is shared state (Redis), discussed in the interview guide.
@@ -197,7 +197,7 @@ python eval/run_aiops_eval.py   # 20-fault chaos benchmark (must stay >= 95%)
 docker build -t aegis-api:local .
 docker run --rm -p 8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /app/data:uid=10001,gid=10001 \
-  -e CORS_ORIGINS=http://localhost:8000 \
+  -e AEGIS_CORS_ORIGINS=http://localhost:8000 \
   aegis-api:local
 curl localhost:8000/health
 ```
@@ -290,7 +290,7 @@ Internet ──443──> Caddy (auto Let's Encrypt TLS) ──> api:8000 ──
 5. **Get the deployment files and configure them:**
    ```bash
    git clone https://github.com/Umanagalla27/aegis-enterprise-ai.git && cd aegis-enterprise-ai/docker
-   cp .env.example .env && nano .env       # set DOMAIN, CORS_ORIGINS, GRAFANA_ADMIN_PASSWORD, IMAGE_TAG=<sha>
+   cp .env.example .env && nano .env       # set DOMAIN, AEGIS_CORS_ORIGINS, GRAFANA_ADMIN_PASSWORD, IMAGE_TAG=<sha>
    chmod 600 .env
    ```
 6. **Start:**
@@ -378,7 +378,7 @@ kubectl apply -f k8s/argocd/application.yaml
 kubectl -n argocd get applications            # SYNC STATUS: Synced, HEALTH: Healthy
 ```
 
-Change `ingress.hosts[0].host`, `ingress.tls[0].hosts` and `env.CORS_ORIGINS` in `values.yaml` to your real domain before syncing.
+Change `ingress.hosts[0].host`, `ingress.tls[0].hosts` and `env.AEGIS_CORS_ORIGINS` in `values.yaml` to your real domain before syncing.
 
 **From now on, deploying means a Git commit:** bump `image.tag` in `values.yaml`, merge the PR, and ArgoCD rolls it out. **Rolling back means `git revert`.**
 
@@ -423,7 +423,7 @@ terraform destroy              # tear down the demo to stop billing
 
 | Setting | Where it is read | Example |
 | :--- | :--- | :--- |
-| `CORS_ORIGINS` | `src/api/main.py` | `https://aegis.yourdomain.com` (comma-separated). `*` disables credentials |
+| `AEGIS_CORS_ORIGINS` | `src/api/main.py` | `https://aegis.yourdomain.com` (comma-separated; default `http://localhost:8000`). Credentials are always disabled |
 | `WEB_CONCURRENCY` | `Dockerfile` CMD | Gunicorn workers. Rule of thumb: `2 x vCPU` for I/O-bound apps; keep it small here because state is per-process |
 | `PORT` | `Dockerfile` CMD | `8000` |
 
@@ -530,11 +530,11 @@ Format: **Symptom**, then **Cause**, then **Fix**. Entries marked ✅ were repro
 | 4 | `422 Unprocessable Entity` | Request body does not match the Pydantic model (missing field, wrong type) | Read the `detail` array in the response; it names the exact field. Check `/docs` for the schema |
 | 5 | `405 Method Not Allowed` | Using `GET` on a `POST` endpoint (all `/v1/...` routes are POST) | Use `curl -X POST` |
 | 6 | `/v1/rag/topology` returns 422 `service_name field required` when sending JSON | The endpoint reads `service_name` from the **query string** | `POST /v1/rag/topology?service_name=api-gateway` |
-| 7 ✅ | `/v1/telemetry/ingest` returns `NORMAL` even for `latency_ms: 999999` | The anomaly engine was never fitted, so each value was compared with itself (z = 0) | **Fixed:** rolling baseline (`BASELINE_MIN_EVENTS = 30`), `baseline_ready` flag in the response |
+| 7 ✅ | `/v1/telemetry/ingest` returns `NORMAL` even for `latency_ms: 999999` | The anomaly engine was never fitted, so each value was compared with itself (z = 0) | **Fixed:** rolling per-service baseline (`TELEMETRY_WARMUP_EVENTS = 20`); the response reports `WARMING_UP` until it is ready, and anomalous events never enter the baseline |
 | 8 ✅ | RCA report lists error logs and commits from **other** services | Filter used `service == X OR level == ERROR`; untagged commit fallback used substring matching | **Fixed:** logs must belong to the service and be ERROR/CRITICAL; commits compared exactly |
 | 9 | `[CRITICAL] WORKER TIMEOUT (pid:...)` in gunicorn logs | A request ran longer than `--timeout 60` (for example a heavy eval endpoint), so gunicorn killed the worker | Make long jobs asynchronous (queue + worker, return a job ID), or raise `--timeout` for that deployment |
 | 10 | `[ERROR] Worker (pid:7) was sent SIGTERM!` on shutdown | Normal gunicorn message during graceful shutdown | Nothing to fix; it appears after `Application shutdown complete` |
-| 11 | Browser console: `CORS policy: No 'Access-Control-Allow-Origin'` | Front-end origin not in `CORS_ORIGINS` | Add the exact origin (scheme + host + port) to `CORS_ORIGINS`. Note that wildcard `*` with credentials is rejected by browsers, which is why the code disables credentials for `*` |
+| 11 | Browser console: `CORS policy: No 'Access-Control-Allow-Origin'` | Front-end origin not in `AEGIS_CORS_ORIGINS` | Add the exact origin (scheme + host + port) to `AEGIS_CORS_ORIGINS`. The API never sends credentialed CORS responses |
 | 12 | Different pods return different incident IDs / HITL approval "lost" | State is **in memory per process**: `RootCauseAnalysisAgent.incident_counter`, LangGraph `MemorySaver`, retriever index | Move shared state to Postgres or Redis (for example LangGraph `PostgresSaver`, DB sequences for IDs). Until then, scaling replicas changes behaviour; see INTERVIEW_PREP "Known limitations" |
 
 ### Lint / CI errors

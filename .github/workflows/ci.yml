@@ -82,6 +82,9 @@ jobs:
       - name: Run Phase 5 (AIOps, RCA & Prometheus) Tests
         run: pytest tests/test_phase5.py -v
 
+      - name: Run Bug-Fix Regression Tests
+        run: pytest tests/test_regressions.py -v
+
       - name: Run Phase 7 (RAGAS & Agent Regression Gates) Tests
         run: pytest eval/test_eval_gates.py -v
 

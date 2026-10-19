@@ -71,7 +71,12 @@ class AegisHybridRetriever:
 
         query_tokens = self._tokenize(query)
         scores = self.bm25.get_scores(query_tokens)
-        ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        # BM25Plus adds a small floor score (delta * idf) for every query term, even in
+        # documents that do not contain it. Without this filter, unrelated runbooks got
+        # positive scores and were returned for queries that matched nothing.
+        query_set = set(query_tokens)
+        relevant = [i for i, toks in enumerate(self.tokenized_corpus) if query_set & set(toks)]
+        ranked_indices = sorted(relevant, key=lambda i: scores[i], reverse=True)
 
         results = []
         for idx in ranked_indices[:top_k]:
@@ -136,7 +141,9 @@ class AegisHybridRetriever:
                 rrf_scores[res.chunk_id] += 1.0 / (k + rank + 1)
 
         doc_lookup = {doc["chunk_id"]: doc for doc in self.documents}
-        sorted_ids = sorted(rrf_scores.keys(), key=lambda cid: rrf_scores[cid], reverse=True)
+        # Only documents that at least one retriever found relevant are returned.
+        matched = [cid for cid, score in rrf_scores.items() if score > 0]
+        sorted_ids = sorted(matched, key=lambda cid: rrf_scores[cid], reverse=True)
 
         results = []
         for cid in sorted_ids[:top_k]:
