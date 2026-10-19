@@ -1,0 +1,20 @@
+{
+  "sample_lines": [
+    "aegis_http_requests_total{endpoint=\"/health\",method=\"GET\",status_code=\"200\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/services/status\",method=\"GET\",status_code=\"200\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/rag/search\",method=\"POST\",status_code=\"200\"} 2.0",
+    "aegis_http_requests_total{endpoint=\"/v1/rag/topology\",method=\"POST\",status_code=\"200\"} 4.0",
+    "aegis_http_requests_total{endpoint=\"/v1/security/inspect\",method=\"POST\",status_code=\"200\"} 4.0",
+    "aegis_http_requests_total{endpoint=\"/v1/telemetry/ingest\",method=\"POST\",status_code=\"200\"} 23.0",
+    "aegis_http_requests_total{endpoint=\"/v1/telemetry/ingest\",method=\"POST\",status_code=\"422\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/incidents/diagnose\",method=\"POST\",status_code=\"200\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/agent/incidents\",method=\"POST\",status_code=\"200\"} 5.0",
+    "aegis_http_requests_total{endpoint=\"/v1/agent/incidents/{thread_id}/decision\",method=\"POST\",status_code=\"200\"} 2.0",
+    "aegis_http_requests_total{endpoint=\"/v1/agent/incidents/{thread_id}/decision\",method=\"POST\",status_code=\"409\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/eval/chaos\",method=\"POST\",status_code=\"200\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/eval/agents\",method=\"POST\",status_code=\"200\"} 1.0",
+    "aegis_http_requests_total{endpoint=\"/v1/eval/ragas\",method=\"POST\",status_code=\"200\"} 1.0",
+    "aegis_anomaly_detections_total{detector_type=\"Z_SCORE\",severity=\"CRITICAL\"} 2.0"
+  ],
+  "total_metric_lines": 224
+}

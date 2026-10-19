@@ -36,8 +36,8 @@ class HybridAnomalyEngine:
         self.is_fitted = False
         self.baseline_stats: dict[str, dict[str, float]] = {}
 
-    def fit_baseline(self, historical_events: list[dict[str, Any]]) -> None:
-        """Fits baseline mean/std and trains Isolation Forest on normal operational telemetry."""
+    def fit_statistics(self, historical_events: list[dict[str, Any]]) -> None:
+        """Computes per-metric mean/std only (cheap; used for rolling Z-score baselines)."""
         if not historical_events:
             return
 
@@ -59,6 +59,13 @@ class HybridAnomalyEngine:
                 "std": float(np.std(mems)) or 1.0,
             },
         }
+
+    def fit_baseline(self, historical_events: list[dict[str, Any]]) -> None:
+        """Fits baseline mean/std and trains Isolation Forest on normal operational telemetry."""
+        if not historical_events:
+            return
+
+        self.fit_statistics(historical_events)
 
         # Fit multivariate Isolation Forest
         feature_matrix = np.array(

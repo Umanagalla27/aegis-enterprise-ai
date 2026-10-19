@@ -31,5 +31,8 @@ def get_service_topology(service_name: str) -> str:
 
 @mcp.tool()
 def execute_deployment_rollback(service_name: str, target_commit: str) -> str:
-    """Executes a container rollback in Kubernetes/ECS (Requires HITL approval)."""
-    return f"SUCCESS: Rolled back {service_name} to commit {target_commit}."
+    """Executes a container rollback in Kubernetes/ECS (Requires HITL approval).
+
+    SIMULATED: no cluster is contacted. A real version would call the Kubernetes or ECS API.
+    """
+    return f"[SIMULATED] SUCCESS: Rolled back {service_name} to commit {target_commit}."

@@ -1,0 +1,67 @@
+{
+  "request": {
+    "service_name": "rag-retrieval",
+    "observed_latency_ms": 3200,
+    "error_logs": [
+      {
+        "service": "rag-retrieval",
+        "level": "ERROR",
+        "message": "Timeout to pgvector:5435"
+      },
+      {
+        "service": "rag-retrieval",
+        "level": "INFO",
+        "message": "health probe ok"
+      },
+      {
+        "service": "billing",
+        "level": "ERROR",
+        "message": "card declined"
+      }
+    ],
+    "recent_commits": [
+      {
+        "commit_hash": "a1b2c3d",
+        "author": "uma",
+        "message": "Raise HNSW M to 64",
+        "service": "rag-retrieval"
+      },
+      {
+        "commit_hash": "f00ba44",
+        "author": "x",
+        "message": "UI copy",
+        "service": "web"
+      }
+    ]
+  },
+  "response": {
+    "report": {
+      "incident_id": "INC-0001",
+      "service_name": "rag-retrieval",
+      "severity": "P1",
+      "fault_type": "LATENCY_SPIKE",
+      "root_cause_summary": "Deployment regression in commit 'a1b2c3d' by uma: 'Raise HNSW M to 64'. Triggered resource exhaustion in rag-retrieval.",
+      "correlated_logs": [
+        "[ERROR] Timeout to pgvector:5435"
+      ],
+      "correlated_commits": [
+        {
+          "commit_hash": "a1b2c3d",
+          "author": "uma",
+          "message": "Raise HNSW M to 64",
+          "service": "rag-retrieval"
+        }
+      ],
+      "blast_radius": [
+        "rag-retrieval",
+        "api-gateway"
+      ],
+      "recommended_runbook": "runbooks/mitigate_db_pool_exhaustion.md",
+      "action_plan": [
+        "Initiate canary rollback for commit a1b2c3d.",
+        "Scale up rag-retrieval replicas by 50% to absorb pending request buffer.",
+        "Drain connection pool and verify P95 latency returns under 60ms."
+      ]
+    }
+  }
+}

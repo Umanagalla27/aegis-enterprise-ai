@@ -1,0 +1,84 @@
+{
+  "partition_for_each_service": {
+    "api-gateway": 3,
+    "rag-retrieval": 3,
+    "auth-service": 1,
+    "db-writer": 0
+  },
+  "produce_results": [
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 3",
+      "partition": 3
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 3",
+      "partition": 3
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 1",
+      "partition": 1
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 0",
+      "partition": 0
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 3",
+      "partition": 3
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 3",
+      "partition": 3
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 1",
+      "partition": 1
+    },
+    {
+      "ok": true,
+      "msg": "Event accepted into partition 0",
+      "partition": 0
+    },
+    {
+      "ok": false,
+      "msg": "Event diverted to DLQ: 1 validation error for TelemetryEventSchema\ncpu_percent\n  Input sho",
+      "partition": null
+    },
+    {
+      "ok": false,
+      "msg": "Event diverted to DLQ: 1 validation error for TelemetryEventSchema\nlatency_ms\n  Input shou",
+      "partition": null
+    },
+    {
+      "ok": false,
+      "msg": "Event diverted to DLQ: 4 validation errors for TelemetryEventSchema\ncpu_percent\n  Field re",
+      "partition": null
+    }
+  ],
+  "high_watermarks": {
+    "0": 2,
+    "1": 2,
+    "2": 0,
+    "3": 4
+  },
+  "dlq_size": 3,
+  "dlq_first_reason": "1 validation error for TelemetryEventSchema\ncpu_percent\n  Input should be less than or equal to 100 [type=less_than_equal, input_value=140, input_type=int]\n    ",
+  "consumer_assigned_partitions": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "lag_before_poll": 8,
+  "records_polled": 8,
+  "lag_after_poll_before_commit": 8,
+  "lag_after_commit": 0,
+  "zero_lag_verified": true
+}

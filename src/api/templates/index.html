@@ -1209,6 +1209,19 @@
         });
         const data = await res.json();
         const anomaly = data.anomaly_result;
+        if (!anomaly) {
+          box.innerHTML = `
+          <div style="margin-bottom:8px;">
+            <strong>Status:</strong> <span style="color:var(--amber); font-weight:700;">WARMING UP</span>
+            &bull; Baseline events: <strong>${data.baseline_events} / ${data.events_needed}</strong>
+          </div>
+          <div style="color:var(--text-muted); font-size:12px; margin-bottom:8px;">
+            Send more normal events for this service before anomalies can be scored.
+          </div>
+          <pre style="color:#a5b4fc; font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
+          return;
+        }
+        const anomaly = data.anomaly_result;
         const color = anomaly.severity === 'CRITICAL' ? 'var(--red)' : 
                       anomaly.severity === 'WARNING' ? 'var(--amber)' : 'var(--green)';
 
@@ -1219,7 +1232,7 @@
             &bull; Confidence: <strong>${(anomaly.confidence * 100).toFixed(0)}%</strong>
           </div>
           <div style="color:var(--text-muted); font-size:12px; margin-bottom:8px;">
-            Observed: ${anomaly.observed_value}ms | Baseline Mean: ${anomaly.baseline_mean}ms | Z-Score: ${anomaly.details.z_score || 0}
+            Metric: ${anomaly.metric_name} | Observed: ${anomaly.observed_value} | Baseline Mean: ${anomaly.baseline_mean} | Z-Score: ${anomaly.details.z_score || 0}
           </div>
           <pre style="color:#a5b4fc; font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
       } catch (err) {
@@ -1371,12 +1384,13 @@
         const res = await fetch('/v1/eval/chaos', { method: 'POST' });
         const data = await res.json();
         box.innerHTML = `
-          <div style="color:var(--green); font-weight:700; margin-bottom:8px;">
-            CHAOS BENCHMARK COMPLETE: PASS
+          <div style="color:${data.passed ? 'var(--green)' : 'var(--red)'}; font-weight:700; margin-bottom:8px;">
+            CHAOS BENCHMARK COMPLETE: ${data.passed ? 'PASS' : 'FAIL'}
           </div>
-          <div>Total Injected Faults: <strong>${data.total_faults}</strong></div>
-          <div>Fault Detection Rate: <strong style="color:var(--green)">100.0%</strong></div>
-          <div>RCA Triage Accuracy: <strong style="color:var(--green)">100.0%</strong></div>
+          <div>Total Injected Faults: <strong>${data.total_faults}</strong> (+ ${data.total_controls} healthy controls)</div>
+          <div>Fault Detection Rate: <strong>${data.detection_rate.toFixed(1)}%</strong> (&ge; 95% required)</div>
+          <div>RCA Triage Accuracy: <strong>${data.triage_accuracy.toFixed(1)}%</strong> (&ge; 95% required)</div>
+          <div>False Positive Rate: <strong>${data.false_positive_rate.toFixed(1)}%</strong> (&le; 10% allowed)</div>
           <div style="margin-top:8px; font-size:11px; color:var(--text-muted);">Fault categories: ${data.fault_types.join(', ')}</div>
         `;
       } catch (err) {
@@ -1393,13 +1407,16 @@
         const res = await fetch('/v1/eval/ragas', { method: 'POST' });
         const data = await res.json();
         box.innerHTML = `
-          <div style="color:var(--green); font-weight:700; margin-bottom:8px;">
-            RAGAS GATE PASSED (Strict Enterprise Thresholds)
+          <div style="color:${data.passed_gate ? 'var(--green)' : 'var(--red)'}; font-weight:700; margin-bottom:8px;">
+            RAGAS GATE ${data.passed_gate ? 'PASSED' : 'FAILED'} (lexical-overlap proxy, strict thresholds)
           </div>
           <div>Faithfulness: <strong style="color:var(--cyan)">${(data.faithfulness * 100).toFixed(1)}%</strong> (&ge; 85.0% required)</div>
           <div>Context Recall: <strong style="color:var(--cyan)">${(data.context_recall * 100).toFixed(1)}%</strong> (&ge; 80.0% required)</div>
           <div>Answer Relevance: <strong>${(data.answer_relevance * 100).toFixed(1)}%</strong></div>
           <div>Context Precision: <strong>${(data.context_precision * 100).toFixed(1)}%</strong></div>
+          <div style="margin-top:8px; font-size:11px; color:var(--text-muted);">
+            ${data.per_sample.map(x => `${x.query} &rarr; faithfulness ${(x.faithfulness*100).toFixed(0)}%, recall ${(x.context_recall*100).toFixed(0)}%`).join('<br>')}
+          </div>
         `;
       } catch (err) {
         box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
