@@ -20,6 +20,8 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # The app never calls the Kubernetes API, so no service-account token is mounted
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       # Longer than gunicorn's --graceful-timeout so in-flight requests finish on rollout

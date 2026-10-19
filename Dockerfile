@@ -26,9 +26,10 @@ RUN groupadd --system --gid 10001 aegis \
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
-COPY --chown=aegis:aegis src ./src
-COPY --chown=aegis:aegis eval ./eval
-COPY --chown=aegis:aegis data_platform ./data_platform
+# Code stays root-owned: the app user can read it but cannot modify it
+COPY src ./src
+COPY eval ./eval
+COPY data_platform ./data_platform
 # The ETL endpoints write Parquet/SQLite output under data/
 RUN mkdir -p /app/data/analytics && chown -R aegis:aegis /app/data
 
