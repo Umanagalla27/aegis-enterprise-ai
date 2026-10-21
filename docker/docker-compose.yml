@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: uma
       POSTGRES_PASSWORD: password
       POSTGRES_DB: aegis_db
+      # Exposed so the FastAPI app (running on the host) can connect
+      AEGIS_DATABASE_URL: "postgresql://uma:password@localhost:5435/aegis_db"
     ports:
       - "5435:5432" # Port 5435 to avoid any collision with previous projects
     volumes:

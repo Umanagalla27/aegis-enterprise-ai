@@ -24,6 +24,9 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort | default 8000 }}
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ include "aegis-platform.fullname" . }}-db
           livenessProbe:
             httpGet:
               path: /health

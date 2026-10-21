@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from eval.agent_evaluator import MultiAgentBenchmarkEvaluator
 from eval.ragas_evaluator import EnterpriseRagasEvaluator
 from eval.run_aiops_eval import evaluate_chaos
-from src.agents.graph import build_aegis_graph
+from src.agents.graph import build_aegis_graph, thread_exists
 from src.agents.rca_agent import RootCauseAnalysisAgent
 from src.agents.state import IncidentTicket
 from src.api.dashboard import get_dashboard_html
@@ -54,10 +54,9 @@ TELEMETRY_WARMUP_EVENTS = 20
 TELEMETRY_WINDOW = 500
 _telemetry_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=TELEMETRY_WINDOW))
 
-# One compiled LangGraph app for the process. MemorySaver keeps each incident's
-# state (keyed by thread_id) in memory, so it is lost when the server restarts.
+# One compiled LangGraph app backed by PostgresSaver checkpointer.
+# Thread existence is verified directly via thread_exists() in the checkpointer.
 agent_app = build_aegis_graph()
-_agent_threads: set[str] = set()
 
 # Pre-populate RAG runbooks for instant interactive testing
 if not retriever.documents:
@@ -473,7 +472,6 @@ def trigger_spark_aggregation():
         "aggregated_metrics": summary_df.to_dict(orient="records"),
     }
 
-
 # ---------------------------------------------------------------------------
 # LangGraph multi-agent workflow with Human-in-the-Loop approval
 # ---------------------------------------------------------------------------
@@ -527,13 +525,12 @@ def start_agent_incident(req: AgentIncidentRequest):
     config = {"configurable": {"thread_id": thread_id}}
     for _ in agent_app.stream(state, config=config):
         pass
-    _agent_threads.add(thread_id)
     return _agent_view(thread_id)
 
 
 @app.get("/v1/agent/incidents/{thread_id}")
 def get_agent_incident(thread_id: str):
-    if thread_id not in _agent_threads:
+    if not thread_exists(thread_id):
         raise HTTPException(status_code=404, detail="Unknown incident thread")
     return _agent_view(thread_id)
 
@@ -541,7 +538,7 @@ def get_agent_incident(thread_id: str):
 @app.post("/v1/agent/incidents/{thread_id}/decision")
 def decide_agent_incident(thread_id: str, req: AgentDecisionRequest):
     """Resumes a paused incident with the reviewer's approve/reject decision."""
-    if thread_id not in _agent_threads:
+    if not thread_exists(thread_id):
         raise HTTPException(status_code=404, detail="Unknown incident thread")
     config = {"configurable": {"thread_id": thread_id}}
     if not agent_app.get_state(config).next:

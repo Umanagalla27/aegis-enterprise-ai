@@ -1,9 +1,11 @@
 replicaCount: 3
 
 image:
-  repository: aegis-enterprise-ai
-  pullPolicy: IfNotPresent
-  tag: "1.0.0"
+  repository: ghcr.io/umanagalla27/aegis-enterprise-ai
+  pullPolicy: Always
+  # CI auto-updates this to the commit SHA after each successful build.
+  # Fallback "latest" ensures first deploy works; production should pin to SHA.
+  tag: "latest"
 
 service:
   type: ClusterIP
@@ -36,3 +38,8 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 75
   targetMemoryUtilizationPercentage: 80
+
+db:
+  # Connection string for LangGraph PostgresSaver checkpointer.
+  # Override per-environment with --set db.url=...
+  url: "postgresql://uma:password@aegis-postgres:5432/aegis_db"

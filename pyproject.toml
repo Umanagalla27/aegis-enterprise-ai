@@ -9,7 +9,8 @@ exclude = [
     "terraform",
     "ci_cd",
     "data_platform/dbt_project",
-    "results"
+    "results",
+    "scripts"
 ]
 
 [tool.ruff.lint]

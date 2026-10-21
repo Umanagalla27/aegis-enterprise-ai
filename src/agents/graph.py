@@ -1,6 +1,9 @@
-from langgraph.checkpoint.memory import MemorySaver
+import os
+
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
+from psycopg_pool import ConnectionPool
 
 from src.agents.incident_classifier import SEVERITY_BY_FAULT, classify_fault
 from src.agents.state import AegisAgentState, RemediationAction, TriageOutput
@@ -141,7 +144,8 @@ def check_security(state: AegisAgentState) -> str:
     return "quarantine" if state.get("security_flagged") else "triage"
 
 
-def build_aegis_graph():
+def _build_workflow() -> StateGraph:
+    """Constructs the Aegis state graph (nodes + edges) without compiling."""
     workflow = StateGraph(AegisAgentState)
 
     workflow.add_node("security_node", security_node)
@@ -163,5 +167,55 @@ def build_aegis_graph():
     workflow.add_edge("action_planning_node", "execution_node")
     workflow.add_edge("execution_node", END)
 
-    checkpointer = MemorySaver()
-    return workflow.compile(checkpointer=checkpointer)
+    return workflow
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton: connection pool, checkpointer, compiled graph
+# ---------------------------------------------------------------------------
+_pool = None
+_checkpointer = None
+_compiled_graph = None
+
+
+def build_aegis_graph(checkpointer=None):
+    """Returns the compiled graph backed by PostgreSQL checkpointer (singleton)."""
+    global _pool, _checkpointer, _compiled_graph
+
+    if checkpointer is not None:
+        return _build_workflow().compile(checkpointer=checkpointer)
+
+    if _compiled_graph is not None:
+        return _compiled_graph
+
+    db_url = os.environ.get("AEGIS_DATABASE_URL")
+    if db_url:
+        _pool = ConnectionPool(db_url)
+        _checkpointer = PostgresSaver(_pool)
+        _checkpointer.setup()  # creates checkpoint tables if they don't exist
+    else:
+        from langgraph.checkpoint.memory import MemorySaver
+
+        _checkpointer = MemorySaver()
+
+    _compiled_graph = _build_workflow().compile(checkpointer=_checkpointer)
+    return _compiled_graph
+
+
+def get_checkpointer() -> PostgresSaver:
+    """Returns the shared PostgresSaver instance (builds graph if needed)."""
+    if _checkpointer is None:
+        build_aegis_graph()
+    return _checkpointer
+
+
+def thread_exists(thread_id: str) -> bool:
+    """Check whether a thread already has checkpoint state in PostgreSQL.
+
+    Replaces in-memory ``_agent_threads: set`` — safe across multiple
+    workers / replicas since it queries the shared database directly.
+    """
+    checkpointer = get_checkpointer()
+    config = {"configurable": {"thread_id": thread_id}}
+    checkpoint = checkpointer.get(config)
+    return checkpoint is not None
