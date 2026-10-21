@@ -22,7 +22,7 @@ Companion document: [INTERVIEW_PREP.md](INTERVIEW_PREP.md) (resume bullets, proj
 - [Phase 5: CI/CD pipeline (GitHub Actions to GHCR)](#phase-5-cicd-pipeline)
 - [Phase 6: Deploy, Option A: single VM with Docker Compose and HTTPS](#phase-6-option-a-single-vm)
 - [Phase 6: Deploy, Option B: Kubernetes with Helm and ArgoCD (GitOps)](#phase-6-option-b-kubernetes)
-- [Phase 6: Deploy, Option C: AWS ECS Fargate with Terraform](#phase-6-option-c-aws-ecs-fargate-with-terraform)
+- [Phase 6: Deploy, Option C: Terraform (AWS VM)](#phase-6-option-c-terraform-aws-vm)
 - [Phase 7: Configuration and secrets](#phase-7-configuration-and-secrets)
 - [Phase 8: Observability (metrics, logs, traces, alerts)](#phase-8-observability)
 - [Phase 9: Releases, rollbacks and zero-downtime deploys](#phase-9-releases-and-rollbacks)
@@ -91,6 +91,14 @@ docker compose -f docker/docker-compose.yml ps     # all should be "running"/"he
 
 Ports are deliberately non-default (5435, 6382, 9091, 3001) to avoid clashing with other local projects.
 
+The API works without them (state is then kept in process memory). To use them the way production does:
+
+```bash
+export AEGIS_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db   # HITL checkpoints
+export AEGIS_REDIS_URL=redis://localhost:6382/0                                # baselines, rate limits
+export AEGIS_API_KEY=dev-key                                                    # optional: require X-API-Key on /v1
+```
+
 ### 1.4 Run the API
 
 ```bash
@@ -137,7 +145,20 @@ curl -s -X POST localhost:8000/v1/telemetry/ingest -H "content-type: application
 # -> "status": "SCORED", "anomaly_result": {"is_anomaly": true, "severity": "CRITICAL", ...}
 ```
 
-> The baseline lives in process memory. Under gunicorn with `WEB_CONCURRENCY=2` (the Docker image), each worker learns its own baseline, so warm-up takes about twice as many events. This is a known limitation; the fix is shared state (Redis), discussed in the interview guide.
+> With `AEGIS_REDIS_URL` set, the baseline is shared by every worker and pod and survives restarts. Without it, each process learns its own baseline.
+
+**Authentication:** when `AEGIS_API_KEY` is set, every `/v1` call needs `-H "X-API-Key: <key>"` (otherwise `401`). `/health`, `/metrics` and the dashboard page stay open; the dashboard asks for the key once. Evaluation, pipeline and agent-start endpoints are limited to `AEGIS_HEAVY_RATE_LIMIT` (default `10/minute`, then `429`).
+
+**Human approval over HTTP:**
+
+```bash
+curl -s -X POST localhost:8000/v1/agent/incidents -H "content-type: application/json" \
+  -d '{"service_name":"rag-retrieval","description":"CUDA OOM critical"}'
+# -> "status": "AWAITING_APPROVAL", "thread_id": "inc-..."
+curl -s -X POST localhost:8000/v1/agent/incidents/<thread_id>/decision \
+  -H "content-type: application/json" -d '{"approved": true, "reviewer": "sre-lead"}'
+# -> "status": "COMPLETED"
+```
 
 ---
 
@@ -181,13 +202,24 @@ python eval/run_aiops_eval.py   # 20-fault chaos benchmark (must stay >= 95%)
 | `tests/test_phase3.py` | LangGraph workflow, HITL interrupt/resume, PII redaction, injection defense, tool allowlist |
 | `tests/test_phase4.py` | Kafka partitioning and DLQ, consumer offsets, aggregator quantiles, dbt marts, Airflow SLA gate |
 | `tests/test_phase5.py` | Anomaly engine, RCA agent, FastAPI endpoints, Prometheus metrics, **regression tests for the bugs fixed in this project** |
+| `tests/test_regressions.py` | Bugs found by running every component end to end (PR #1) |
+| `tests/test_shared_state.py` | A HITL approval resumed by a *different* worker (Postgres), Redis-shared baselines, unique incident IDs |
+| `tests/test_api_security.py` | `401` without the API key, open probes, forged approvals rejected, `429` rate limit |
+| `tests/test_observability.py` | `X-Request-ID` propagation and JSON log lines |
 | `eval/test_eval_gates.py` | Quality gates: faithfulness >= 0.85, recall >= 0.80, agent accuracy >= 90%, HITL = 100% |
 
 **The testing pyramid companies use:** many fast unit tests, fewer integration tests (FastAPI `TestClient`), a handful of end-to-end smoke tests against a deployed environment (the CI smoke test in Phase 5 is one).
 
 **Regression test rule:** every bug fix ships with a test that **fails before the fix and passes after it**. The three tests at the bottom of `tests/test_phase5.py` were verified this way.
 
-> ⚠️ Known test side effect: running `tests/test_phase4.py` or the ETL endpoint rewrites the tracked file `data/analytics/daily_service_metrics.parquet`. Run `git checkout data/` before committing, or (better, a good first PR) change the tests to use pytest's `tmp_path`.
+The Postgres/Redis tests run when `AEGIS_TEST_DATABASE_URL` / `AEGIS_TEST_REDIS_URL` are set (CI sets them; locally they are skipped otherwise):
+
+```bash
+AEGIS_TEST_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db \
+AEGIS_TEST_REDIS_URL=redis://localhost:6382/1 pytest -q tests/test_shared_state.py
+```
+
+`tests/conftest.py` resets rate-limit counters before each test and points ETL output (`AEGIS_DATA_DIR`) at a temporary directory, so test runs never modify the tracked `data/analytics/` sample.
 
 ---
 
@@ -202,6 +234,7 @@ docker run --rm -p 8000:8000 \
   -e AEGIS_CORS_ORIGINS=http://localhost:8000 \
   aegis-api:local
 curl localhost:8000/health
+scripts/smoke_test.sh http://localhost:8000          # health + 5 HITL round trips
 ```
 
 ### 4.2 The `Dockerfile`, line by line
@@ -210,12 +243,15 @@ curl localhost:8000/health
 | :--- | :--- |
 | **Multi-stage build** (`builder` then `runtime`) | Compilers and pip caches stay in the throwaway stage, so the final image is smaller and has less attack surface |
 | `python:3.12-slim` | Same Python version as CI; `slim` drops roughly 800 MB of unused OS packages |
-| **`requirements-prod.txt`** (not `requirements.txt`) | The API never imports torch, transformers or langchain. Installing them would add several GB, slow every deploy and pull in more CVEs. Result: **~233 MB compressed** |
+| **`requirements-prod.txt`** (not `requirements.txt`) | The API never imports torch, transformers or langchain. Installing them would add several GB, slow every deploy and pull in more CVEs |
+| **Lock file with hashes** (`requirements-prod.in` → `requirements-prod.txt`, `pip install --require-hashes`) | Every build of the same commit installs identical versions, and a tampered package fails the build. Regenerate after editing the `.in` file: `pip-compile --generate-hashes --strip-extras requirements-prod.in -o requirements-prod.txt` (with Python 3.12) |
+| **No pip in the final image** | The service never installs packages at runtime, and pip's bundled libraries carried HIGH CVEs |
 | `useradd ... aegis` + `USER aegis` (UID 10001) | **Never run as root.** If the app is compromised, the attacker is an unprivileged user |
 | `COPY` only `src/ eval/ data_platform/` + `.dockerignore` | No `.git`, tests, docs or secrets in the image; better layer caching |
 | `PYTHONUNBUFFERED=1` | Logs appear immediately in `docker logs` / CloudWatch instead of being buffered |
 | `HEALTHCHECK` | Docker marks the container `unhealthy` if `/health` stops answering |
-| **gunicorn + uvicorn workers** | gunicorn supervises worker processes (restarts crashed ones, handles `SIGTERM` gracefully); uvicorn runs the async app. `WEB_CONCURRENCY` controls the worker count |
+| **gunicorn + uvicorn workers** | gunicorn supervises worker processes (restarts crashed ones, handles `SIGTERM` gracefully); uvicorn runs the async app. `WEB_CONCURRENCY` defaults to **1**: more workers need shared state (`AEGIS_DATABASE_URL`, `AEGIS_REDIS_URL`), which the production compose file and Helm chart provide |
+| `AEGIS_LOG_FORMAT=json` | One JSON object per log line, each with a `request_id` |
 | `exec` in `CMD` | The server becomes PID 1 and receives `SIGTERM` directly, which enables graceful shutdown |
 | Read-only root FS + tmpfs `/app/data` | An attacker cannot modify the code on disk; only explicit scratch paths are writable |
 
@@ -240,10 +276,11 @@ File: `.github/workflows/ci.yml`. It runs on pushes to `main`, on every pull req
 ```
 Job 1: lint-and-test                      Job 2: build-and-push-image (needs job 1)
   ├─ Postgres + Redis service containers    ├─ docker buildx build (with GitHub Actions layer cache)
-  ├─ pip install -r requirements.txt        ├─ Smoke test: run container read-only, poll /health
-  ├─ ruff check + ruff format --check       ├─ Trivy scan: fail on fixable HIGH/CRITICAL CVEs
-  ├─ pytest per phase                       ├─ (not on PRs) login to GHCR with GITHUB_TOKEN
-  ├─ eval gates (RAGAS / agent)             └─ push :<short-sha>, and :latest on main
+  ├─ pip install -r requirements.txt        ├─ Smoke test: image with 3 workers + Postgres + Redis +
+  ├─ ruff check + ruff format --check       │   API key; scripts/smoke_test.sh (20 HITL round trips)
+  ├─ pytest per phase                       ├─ Trivy scan: fail on fixable HIGH/CRITICAL CVEs
+  ├─ shared-state tests vs Postgres/Redis   ├─ (not on PRs) login to GHCR with GITHUB_TOKEN
+  ├─ eval gates (RAGAS / agent)             └─ push :<short-sha>, :latest on main, :X.Y.Z on vX.Y.Z tags
   └─ 20-fault chaos benchmark
 ```
 
@@ -252,7 +289,9 @@ Job 1: lint-and-test                      Job 2: build-and-push-image (needs job
 | **Lint before tests** | Cheapest failure first; saves CI minutes |
 | **Service containers** | Real Postgres/Redis in CI, the same as prod, instead of mocks |
 | **`concurrency: cancel-in-progress`** | A new push cancels the outdated run for the same branch |
-| **Smoke test the built image** | Unit tests passing does not prove the *container* starts (missing dependency, wrong `CMD`, file permissions) |
+| **Smoke test the built image** | Unit tests passing does not prove the *container* starts (missing dependency, wrong `CMD`, file permissions). Running it with several workers against real Postgres/Redis is what catches multi-worker state bugs |
+| **Release tags** (`git tag v1.0.0 && git push origin v1.0.0`) | Publishes `:1.0.0`, the tag the Helm chart and `.env.example` deploy |
+| **Dependabot** (`.github/dependabot.yml`) | Weekly PRs for Python packages (lock file), GitHub Actions (SHA pins) and the base image |
 | **Trivy image scan** | Supply-chain security: blocks known-vulnerable packages from reaching prod. Scanned locally: `Total: 0 (HIGH: 0, CRITICAL: 0)` |
 | **Push only from non-PR events** | PRs from forks must never get registry credentials |
 | **`GITHUB_TOKEN` + `packages: write`** | No long-lived password stored anywhere; the token expires when the job ends |
@@ -272,15 +311,19 @@ Option 1 is the most common because every production change remains a reviewed G
 
 **Best choice for a portfolio:** cheap (an AWS `t3.small`, Hetzner CX22, or Oracle Cloud free tier), a real domain, real HTTPS, and the same image as Kubernetes would use.
 
-Files: `docker/docker-compose.prod.yml`, `docker/Caddyfile`, `docker/prometheus.prod.yml`, `docker/.env.example`.
+Files: `docker/docker-compose.prod.yml`, `docker/Caddyfile`, `docker/prometheus.prod.yml`, `docker/prometheus/alerts.yml`, `docker/grafana/`, `docker/.env.example`.
 
 ```
-Internet ──443──> Caddy (auto Let's Encrypt TLS) ──> api:8000 ──scraped by──> Prometheus <── Grafana (127.0.0.1 only)
+Internet ──443──> Caddy (auto Let's Encrypt TLS) ──> api:8000 (2 workers) ──> Postgres (HITL) + Redis (baselines, limits)
+                                                        ▲
+                                    Prometheus (alerts) ┘ <── Grafana (127.0.0.1 only, dashboard provisioned)
 ```
+
+The stack refuses to start until `.env` sets `IMAGE_TAG`, `DOMAIN`, `AEGIS_CORS_ORIGINS`, `AEGIS_API_KEY`, `POSTGRES_PASSWORD` and `GRAFANA_ADMIN_PASSWORD`.
 
 ### Steps
 
-1. **Create a VM** (Ubuntu 24.04, 2 vCPU / 2 GB RAM is enough).
+1. **Create a VM** (Ubuntu 24.04, 2 vCPU / 2 GB RAM is enough). With Terraform, steps 1, 2 and 4 are automated: see [Option C](#phase-6-option-c-terraform-aws-vm).
 2. **Firewall / security group:** allow inbound **22** (SSH, from your IP only), **80** and **443** (from anywhere). Do **not** open 8000, 9090 or 3001.
 3. **DNS:** create an `A` record such as `aegis.yourdomain.com` pointing to the VM's public IP. (A free subdomain from DuckDNS also works.)
 4. **Install Docker:**
@@ -292,7 +335,7 @@ Internet ──443──> Caddy (auto Let's Encrypt TLS) ──> api:8000 ──
 5. **Get the deployment files and configure them:**
    ```bash
    git clone https://github.com/Umanagalla27/aegis-enterprise-ai.git && cd aegis-enterprise-ai/docker
-   cp .env.example .env && nano .env       # set DOMAIN, AEGIS_CORS_ORIGINS, GRAFANA_ADMIN_PASSWORD, IMAGE_TAG=<sha>
+   cp .env.example .env && nano .env       # every value; secrets from: openssl rand -hex 32
    chmod 600 .env
    ```
 6. **Start:**
@@ -301,11 +344,11 @@ Internet ──443──> Caddy (auto Let's Encrypt TLS) ──> api:8000 ──
    docker compose -f docker-compose.prod.yml ps
    docker compose -f docker-compose.prod.yml logs -f caddy    # watch the certificate get issued
    ```
-7. **Verify:** `curl https://aegis.yourdomain.com/health` should return `{"status":"HEALTHY",...}`. Grafana is reachable through an SSH tunnel: `ssh -L 3001:localhost:3001 ubuntu@<vm-ip>`, then open http://localhost:3001.
-8. **Deploy a new version:** set `IMAGE_TAG=<new sha>` in `.env`, then `docker compose ... pull api && docker compose ... up -d api`.
+7. **Verify:** run the smoke test from the VM or your laptop: `scripts/smoke_test.sh https://aegis.yourdomain.com "$AEGIS_API_KEY"` (health, `401` without key, HITL approvals). Grafana is reachable through an SSH tunnel: `ssh -L 3001:localhost:3001 ubuntu@<vm-ip>`, then open http://localhost:3001 (the "Aegis API - Golden Signals" dashboard is pre-loaded).
+8. **Deploy a new version:** set `IMAGE_TAG=<new version or sha>` in `.env`, then `docker compose ... pull api && docker compose ... up -d api`, then the smoke test again.
 9. **Roll back:** set `IMAGE_TAG` back to the previous SHA and run the same command.
 
-> This stack was tested in this repository: the image runs read-only as UID 10001 behind Caddy, and `https://localhost/health` returned `HEALTHY`.
+> This stack was tested in this repository: the image runs read-only as UID 10001 behind Caddy, and `https://localhost/health` returned `HEALTHY`. The multi-worker setup (Postgres + Redis) passed 20/20 HITL approvals across 3 workers.
 
 ---
 
@@ -317,12 +360,14 @@ This is how most mid-to-large companies run services. You can **practice for fre
 
 | File | Purpose |
 | :--- | :--- |
-| `templates/deployment.yaml` | Pods: image, env, probes, resources, **non-root + read-only security context**, `emptyDir` volumes for `/tmp` and `/app/data`, 40 s graceful termination |
+| `templates/deployment.yaml` | Pods: image, env, secrets (API key, database and Redis URLs), probes, resources (measured: ~400 MiB idle, ~475 MiB under load, so 512Mi request / 1Gi limit), **non-root + read-only security context**, `emptyDir` volumes, 40 s graceful termination. It **refuses to render** several replicas without the secret |
 | `templates/service.yaml` | Stable in-cluster virtual IP and DNS name in front of the pods |
 | `templates/ingress.yaml` | Public HTTP(S) routing through ingress-nginx, with a **TLS block** so cert-manager issues a certificate |
 | `templates/hpa.yaml` | HorizontalPodAutoscaler: 3 to 10 replicas at 75% CPU / 80% memory |
-| `values.yaml` | All tunables; override per environment (`values-staging.yaml`, `values-prod.yaml`) |
-| `k8s/argocd/application.yaml` | ArgoCD watches `main` and syncs the chart into the `aegis-production` namespace (prune + self-heal) |
+| `templates/pdb.yaml` | PodDisruptionBudget: at least 2 pods stay up during node drains and upgrades |
+| `templates/networkpolicy.yaml` | Only the ingress controller and Prometheus may connect to the pods |
+| `values.yaml` / `values-staging.yaml` | Production values, and staging overrides layered on top |
+| `k8s/argocd/application.yaml`, `application-staging.yaml` | ArgoCD syncs `main` into `aegis-production` and `aegis-staging` (prune + self-heal) |
 
 **Probes explained (a common interview question):**
 
@@ -343,9 +388,11 @@ kubectl -n kube-system patch deploy metrics-server --type=json \
   -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 
 helm lint k8s/helm/aegis-platform
+# Single replica without Postgres/Redis (the chart requires the secret for more)
 helm upgrade --install aegis k8s/helm/aegis-platform -n aegis --create-namespace \
-  --set image.tag=dev --set ingress.enabled=false
-kubectl -n aegis get pods -w                 # wait for 3/3 Running and READY 1/1
+  --set image.tag=dev --set ingress.enabled=false --set networkPolicy.enabled=false \
+  --set secrets.existingSecret= --set replicaCount=1 --set autoscaling.enabled=false
+kubectl -n aegis get pods -w                 # wait for 1/1 Running and READY 1/1
 kubectl -n aegis port-forward svc/aegis-aegis-platform 8000:8000
 curl localhost:8000/health
 ```
@@ -373,51 +420,54 @@ spec:
     solvers: [ { http01: { ingress: { ingressClassName: nginx } } } ]
 EOF
 
-# 3. ArgoCD
+# 3. Secrets (never in Git): API key + managed Postgres/Redis (RDS, ElastiCache) URLs
+kubectl create namespace aegis-production
+kubectl -n aegis-production create secret generic aegis-secrets \
+  --from-literal=api-key="$(openssl rand -hex 32)" \
+  --from-literal=database-url='postgresql://USER:PASS@HOST:5432/aegis' \
+  --from-literal=redis-url='redis://HOST:6379/0'
+# (same for aegis-staging with its own values; in companies: External Secrets Operator)
+
+# 4. ArgoCD
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl apply -f k8s/argocd/application.yaml
+kubectl apply -f k8s/argocd/application.yaml -f k8s/argocd/application-staging.yaml
 kubectl -n argocd get applications            # SYNC STATUS: Synced, HEALTH: Healthy
 ```
 
 Change `ingress.hosts[0].host`, `ingress.tls[0].hosts` and `env.AEGIS_CORS_ORIGINS` in `values.yaml` to your real domain before syncing.
 
-**From now on, deploying means a Git commit:** bump `image.tag` in `values.yaml`, merge the PR, and ArgoCD rolls it out. **Rolling back means `git revert`.**
+**From now on, deploying means a Git commit:** set the new tag in `values-staging.yaml`, verify staging (smoke test), then promote the same tag to `values.yaml`. ArgoCD rolls each out. **Rolling back means `git revert`.**
 
-### Missing pieces worth adding (and naming in interviews)
-
-- `PodDisruptionBudget` (`minAvailable: 2`) so node drains never take all pods down.
-- `NetworkPolicy` allowing traffic only from the ingress controller and Prometheus.
-- Separate `values-staging.yaml` / `values-prod.yaml` and an ArgoCD Application per environment.
-- A `ServiceMonitor` (Prometheus Operator) so Prometheus discovers the pods automatically.
+Not included (worth naming in interviews): a `ServiceMonitor` for the Prometheus Operator (the pods carry `prometheus.io/*` scrape annotations instead), and an egress NetworkPolicy (Postgres/Redis may be managed services outside the cluster).
 
 ---
 
-## Phase 6: Option C: AWS ECS Fargate with Terraform
+## Phase 6: Option C: Terraform (AWS VM)
 
-`terraform/` currently defines **an ECS cluster, a task definition and a budget alarm. It is not deployable on its own.** Be honest about this in interviews and describe what is missing:
+`terraform/` creates the VM for Option A on AWS, so the server itself is code instead of console clicks. (It replaced an ECS Fargate config that had no service, IAM role, log group, network or load balancer and could never run.)
 
-| Missing resource | Why it is needed |
+| File | What it creates |
 | :--- | :--- |
-| `aws_ecs_service` | A task definition alone runs nothing; the *service* keeps N tasks running and registers them with the load balancer |
-| `aws_iam_role` (task **execution** role with `AmazonECSTaskExecutionRolePolicy`) | Fargate needs it to pull the image and write to CloudWatch. Without it, tasks fail with `ResourceInitializationError` |
-| `aws_cloudwatch_log_group "/ecs/aegis-production"` | The `awslogs` driver fails if the log group does not exist |
-| VPC, subnets, security groups, ALB, target group (health check `/health`), listener with an ACM certificate | Networking and public HTTPS entry |
-| ECR repository (or a GHCR pull secret in Secrets Manager) | The task definition points at a placeholder account `123456789012` and `:latest` |
-| Remote state (`backend "s3"` + DynamoDB lock table) | Local `terraform.tfstate` cannot be shared by a team and has no locking |
-
-Also note: `monthly_budget_usd = 5`. One always-on Fargate task with 0.5 vCPU / 1 GB costs about **$18/month** before the ALB (about $16/month), so the budget alarm **will fire**. That is fine for a demo (the alarm only sends email) but shows why cost estimation is part of design.
-
-Workflow when complete:
+| `main.tf` | Latest Ubuntu 24.04 AMI, security group (SSH only from `ssh_allowed_cidr`; 80/443 public), key pair, EC2 instance (IMDSv2 only, encrypted gp3 disk), Elastic IP |
+| `user_data.sh` | First boot: installs Docker and clones the repository to `/opt/aegis` (secrets are added by you over SSH, never by Terraform) |
+| `budget_alarm.tf` | AWS Budgets email at 80% actual / 100% forecast of `monthly_budget_usd` (default 25) |
+| `providers.tf` | AWS provider and **S3 remote state with native locking** (`use_lockfile`, Terraform >= 1.10, no DynamoDB table) |
+| `outputs.tf` | Public IP for your DNS record, and the SSH command |
 
 ```bash
 cd terraform
-terraform init          # downloads providers, configures backend
+cp terraform.tfvars.example terraform.tfvars     # your IP/32, SSH public key, alert email
+cp backend.hcl.example backend.hcl               # your state bucket (create it once, see the file)
+terraform init -backend-config=backend.hcl
 terraform fmt -check && terraform validate
-terraform plan -out tfplan     # review exactly what will change (in CI, posted on the PR)
-terraform apply tfplan
-terraform destroy              # tear down the demo to stop billing
+terraform plan -out tfplan                       # review exactly what will change
+terraform apply tfplan                           # prints public_ip and ssh_command
+# DNS A record -> public_ip, then Option A steps 5-7 on the VM (/opt/aegis/docker)
+terraform destroy                                # tear the demo down to stop billing
 ```
+
+Cost: a `t3.small` with a 30 GB gp3 disk and an Elastic IP is roughly **$20/month** in us-east-1, hence the $25 budget default. `ssh_allowed_cidr` is validated to never be `0.0.0.0/0`. `terraform validate` was run against this configuration (provider 5.100.0, verified against HashiCorp's SHA256SUMS); it caught an apostrophe in a security group description that AWS would have rejected at apply time.
 
 ---
 
@@ -425,8 +475,16 @@ terraform destroy              # tear down the demo to stop billing
 
 | Setting | Where it is read | Example |
 | :--- | :--- | :--- |
+| `AEGIS_API_KEY` | `src/api/security.py` | Secret; when set, `/v1` requires `X-API-Key`. Required by the production compose file and Helm chart |
+| `AEGIS_DATABASE_URL` | `src/agents/checkpointing.py` | `postgresql://user:pass@host:5432/aegis`: HITL checkpoints shared by all workers/pods |
+| `AEGIS_REDIS_URL` | `src/observability/baseline_store.py`, `security.py` | `redis://host:6379/0`: anomaly baselines and rate-limit counters |
+| `AEGIS_HEAVY_RATE_LIMIT` | `src/api/security.py` | Default `10/minute` per client for eval, pipeline and agent-start endpoints |
 | `AEGIS_CORS_ORIGINS` | `src/api/main.py` | `https://aegis.yourdomain.com` (comma-separated; default `http://localhost:8000`). Credentials are always disabled |
-| `WEB_CONCURRENCY` | `Dockerfile` CMD | Gunicorn workers. Rule of thumb: `2 x vCPU` for I/O-bound apps; keep it small here because state is per-process |
+| `AEGIS_LOG_FORMAT` / `AEGIS_LOG_LEVEL` | `src/observability/logging_config.py` | `json` in the image, `text` locally / `INFO` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `src/observability/otel_instrumentation.py` | Collector URL (Jaeger, Tempo); tracing is off when unset |
+| `AEGIS_DATA_DIR` | `data_platform/spark/batch_aggregator.py` | Where ETL output is written (default `data`) |
+| `FORWARDED_ALLOW_IPS` | uvicorn | `*` behind Caddy/ingress, so rate limits see the real client IP |
+| `WEB_CONCURRENCY` | `Dockerfile` CMD | Gunicorn workers; default 1, raise only with the database and Redis URLs set |
 | `PORT` | `Dockerfile` CMD | `8000` |
 
 **Secrets rules used in companies:**
@@ -436,7 +494,7 @@ terraform destroy              # tear down the demo to stop billing
 3. CI: GitHub Actions **Secrets** (or OIDC federation to AWS, so no static keys exist at all).
 4. Rotate anything that leaked. Removing it from Git history is not enough.
 
-> The local `docker/docker-compose.yml` uses `password` / `admin` credentials. That is acceptable **only** on a laptop. The production compose file reads them from `.env`.
+> The local `docker/docker-compose.yml` defaults to `password` / `admin` (overridable with `POSTGRES_PASSWORD` / `GRAFANA_ADMIN_PASSWORD`). That is acceptable **only** on a laptop. The production compose file has no defaults and refuses to start without them.
 
 ---
 
@@ -444,7 +502,7 @@ terraform destroy              # tear down the demo to stop billing
 
 The **three pillars** are metrics, logs and traces, plus **alerts** on top.
 
-### Metrics (already implemented)
+### Metrics
 
 `/metrics` exposes:
 
@@ -469,14 +527,33 @@ histogram_quantile(0.95, sum by (le, endpoint) (rate(aegis_http_request_duration
 
 > **Bug fixed in this project:** the middleware labelled metrics with the raw URL (`request.url.path`). Every random 404 path from a scanner (`/wp-admin`, `/.env`, ...) created a **new time series** forever. This is the classic *high-cardinality* problem that can take Prometheus down. Now the route template is used, and unknown paths become `endpoint="unmatched"`.
 
+### Alerts and dashboards (production compose stack)
+
+`docker/prometheus/alerts.yml` (checked with `promtool check rules`):
+
+| Alert | Fires when | Severity |
+| :--- | :--- | :--- |
+| `AegisApiDown` | Prometheus cannot scrape the API for 2 min | critical |
+| `AegisHighErrorRate` | > 1% of requests are 5xx for 5 min | critical |
+| `AegisHighLatencyP95` | p95 of interactive endpoints > 500 ms for 10 min | warning |
+| `AegisRateLimitedRequests` | > 1 rate-limited request/s for 10 min | info |
+| `AegisCriticalAnomalies` | > 5 CRITICAL telemetry anomalies in 10 min | warning |
+
+Each rule has a `runbook` annotation. Grafana starts with the Prometheus datasource and the "Aegis API - Golden Signals" dashboard (traffic, errors, p95, anomalies) already provisioned from `docker/grafana/`. To get notified, add an Alertmanager with your Slack/PagerDuty receiver.
+
 ### Logs
 
-- Gunicorn writes access logs to stdout (`--access-logfile -`). In containers, **always log to stdout/stderr** and let the platform collect them (CloudWatch, Loki, ELK).
-- Next step: structured JSON logs with a request ID so one request can be followed across services.
+The image logs **one JSON object per line** to stdout (`AEGIS_LOG_FORMAT=json`); in containers, always log to stdout and let the platform (CloudWatch, Loki, ELK) collect it. Every request gets an `X-Request-ID` (the caller's or a generated one), returned in the response header and written on every log line produced while handling it, plus one access line:
+
+```json
+{"ts": "...", "level": "INFO", "logger": "aegis.access", "message": "request", "request_id": "c2c5f044...", "method": "POST", "path": "/v1/agent/incidents/{thread_id}/decision", "status": 200, "duration_ms": 28.74}
+```
+
+When a user reports an error, ask for the `X-Request-ID` and search the logs for it.
 
 ### Traces
 
-`src/observability/otel_instrumentation.py` sets up OpenTelemetry with a **console** exporter, and it is not wired into the API. For production, export OTLP to Jaeger, Tempo or Datadog and add `opentelemetry-instrumentation-fastapi`.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example `http://jaeger:4318`) and every request becomes a span exported over OTLP/HTTP (`/health` and `/metrics` excluded). Unset, tracing is off and costs nothing.
 
 ### SLO example (for interviews)
 
@@ -504,7 +581,9 @@ kubectl -n aegis rollout undo deploy/aegis-aegis-platform                 # emer
 IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 ```
 
-**Database migrations** (when Postgres is used for real): use the expand-and-contract pattern. Add the new column, deploy code that writes both, backfill, switch reads, drop the old column. Each step stays backward compatible so a rollback never breaks.
+**Releases:** `git tag v1.1.0 && git push origin v1.1.0` publishes `:1.1.0`. Deploy it to staging (`values-staging.yaml`), run `scripts/smoke_test.sh` against staging, then promote the same tag to production (`values.yaml`, or `IMAGE_TAG` on the VM).
+
+**Database migrations:** the LangGraph checkpoint tables are created on startup under a Postgres advisory lock. For your own tables, use the expand-and-contract pattern. Add the new column, deploy code that writes both, backfill, switch reads, drop the old column. Each step stays backward compatible so a rollback never breaks.
 
 ---
 
@@ -534,17 +613,21 @@ Format: **Symptom**, then **Cause**, then **Fix**. Entries marked ✅ were repro
 | 6 | `/v1/rag/topology` returns 422 `service_name field required` when sending JSON | The endpoint reads `service_name` from the **query string** | `POST /v1/rag/topology?service_name=api-gateway` |
 | 7 ✅ | `/v1/telemetry/ingest` returns `NORMAL` even for `latency_ms: 999999` | The anomaly engine was never fitted, so each value was compared with itself (z = 0) | **Fixed:** rolling per-service baseline (`TELEMETRY_WARMUP_EVENTS = 20`); the response reports `WARMING_UP` until it is ready, and anomalous events never enter the baseline |
 | 8 ✅ | RCA report lists error logs and commits from **other** services | Filter used `service == X OR level == ERROR`; untagged commit fallback used substring matching | **Fixed:** logs must belong to the service and be ERROR/CRITICAL; commits compared exactly |
-| 9 | `[CRITICAL] WORKER TIMEOUT (pid:...)` in gunicorn logs | A request ran longer than `--timeout 60` (for example a heavy eval endpoint), so gunicorn killed the worker | Make long jobs asynchronous (queue + worker, return a job ID), or raise `--timeout` for that deployment |
+| 9 | `[CRITICAL] WORKER TIMEOUT (pid:...)` in gunicorn logs | A request ran longer than `--timeout 60`, so gunicorn killed the worker | Measured: the heaviest endpoints take ~1.4 s, so this needs a much heavier job. Then make it asynchronous (queue + worker, return a job ID) rather than raising the timeout |
 | 10 | `[ERROR] Worker (pid:7) was sent SIGTERM!` on shutdown | Normal gunicorn message during graceful shutdown | Nothing to fix; it appears after `Application shutdown complete` |
 | 11 | Browser console: `CORS policy: No 'Access-Control-Allow-Origin'` | Front-end origin not in `AEGIS_CORS_ORIGINS` | Add the exact origin (scheme + host + port) to `AEGIS_CORS_ORIGINS`. The API never sends credentialed CORS responses |
-| 12 | Different pods return different incident IDs / HITL approval "lost" | State is **in memory per process**: `RootCauseAnalysisAgent.incident_counter`, LangGraph `MemorySaver`, retriever index | Move shared state to Postgres or Redis (for example LangGraph `PostgresSaver`, DB sequences for IDs). Until then, scaling replicas changes behaviour; see INTERVIEW_PREP "Known limitations" |
+| 12 ✅ | `POST /v1/agent/incidents/<id>/decision` returns **404 "Unknown incident thread"** for an incident that exists (3 of 10 tries with 2 workers) | LangGraph `MemorySaver` keeps paused incidents in **one process's memory**; the approval reached another gunicorn worker or pod | **Fixed:** `AEGIS_DATABASE_URL` → `PostgresSaver`, so every worker reads the same checkpoints (20/20 with 4 workers, survives restarts). Also fixed: per-process `INC-0001` counters (now random IDs) and per-worker baselines (Redis) |
+| 12b ✅ | Worker crashes on startup: `psycopg.errors.UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"` | Several workers ran `CREATE TABLE` for the checkpoint schema at the same moment | **Fixed:** schema setup runs under `pg_advisory_lock`, so one worker creates the tables and the others wait |
+| 12c | `401 Missing or invalid API key` | `AEGIS_API_KEY` is set and the request has no / a wrong `X-API-Key` header | Send `-H "X-API-Key: <key>"`; in the dashboard, reload the page and enter the key |
+| 12d | `429 Too Many Requests` | More than `AEGIS_HEAVY_RATE_LIMIT` calls to eval/pipeline/agent-start endpoints from one client | Wait a minute; raise the limit only for a known client. Behind a proxy, set `FORWARDED_ALLOW_IPS` or every user shares one counter |
 
 ### Lint / CI errors
 
 | # | Symptom | Cause | Fix |
 | :--- | :--- | :--- | :--- |
 | 13 ✅ | CI fails at `ruff check .` with `E501 Line too long` / `I001` in `scripts/*.py`, and `ruff format --check` says `4 files would be reformatted` | Files were committed without running the formatter; CI on `main` was **red** | **Fixed** with `ruff check --fix . && ruff format .`. Prevent it with a pre-commit hook: `pip install pre-commit`, then add a ruff hook |
-| 14 ✅ | Running tests modifies `data/analytics/daily_service_metrics.parquet` | ETL tests write to a tracked file | `git checkout data/` before committing; long-term, write to `tmp_path` |
+| 14 ✅ | Running tests modifies `data/analytics/daily_service_metrics.parquet` | ETL tests wrote to a tracked file | **Fixed:** output goes under `AEGIS_DATA_DIR`, which `tests/conftest.py` points at a temporary directory |
+| 14b | `In --require-hashes mode, all requirements must have their versions pinned` / `THESE PACKAGES DO NOT MATCH THE HASHES` during `docker build` | `requirements-prod.txt` was edited by hand, or a package was re-uploaded | Edit `requirements-prod.in` and regenerate the lock with `pip-compile --generate-hashes --strip-extras` (Python 3.12) |
 | 15 | `Error response from daemon: denied` when pushing to GHCR | Workflow lacks `packages: write`, or the package is linked to another repo | Keep `permissions: packages: write` on the job; in the package settings, grant this repo access |
 | 16a ✅ | Trivy fails with HIGH CVEs in `urllib3`, `msgpack`, `setuptools` that `requirements-prod.txt` never installs | The CVEs are in libraries **vendored inside pip** (`pip/_vendor`), which newer Trivy versions scan | Remove pip from the runtime image (the service never installs packages at runtime); see the `Dockerfile`. Find a package's origin with `docker run --rm --entrypoint sh <img> -c 'grep -r <pkg> /opt/venv/lib/python3.12/site-packages/*/_vendor/vendor.txt'` |
 | 16b ✅ | SonarCloud quality gate fails (Security Rating C): *"Use full commit SHA hash for this dependency"* on `uses:` lines | Actions referenced by a movable tag (`@v3`) can be silently re-pointed to malicious code (a real supply-chain attack pattern) | Pin every action to its full commit SHA and keep the version as a comment: `uses: docker/login-action@<40-char-sha> # v3.7.0`. Look up SHAs with `git ls-remote https://github.com/<owner>/<action> 'refs/tags/v3.7.0^{}'`; let Dependabot keep them updated |
@@ -571,6 +654,9 @@ Format: **Symptom**, then **Cause**, then **Fix**. Entries marked ✅ were repro
 | 26 | Pod `Running` but `READY 0/1`, Ingress returns **502/503** | Readiness probe failing, so the pod is not in Service endpoints | `kubectl describe pod` (probe failures), `kubectl get endpoints <svc>`; check the probe path and port |
 | 27 | `OOMKilled` in `kubectl describe pod` | Container exceeded `resources.limits.memory` | Raise the limit or lower `WEB_CONCURRENCY`; measure with `kubectl top pod` |
 | 28 | Pod `Pending`, event `Insufficient cpu` | Requests exceed free node capacity | Lower `resources.requests`, add nodes, or enable the cluster autoscaler |
+| 28a ✅ | `helm template` / ArgoCD: `secrets.existingSecret is required with more than one replica` | Several replicas without Postgres/Redis would break HITL approvals | Create the `aegis-secrets` Secret (Phase 6B.2), or for a single dev replica set `replicaCount=1`, `autoscaling.enabled=false`, `secrets.existingSecret=` |
+| 28c | Pods `CreateContainerConfigError: secret "aegis-secrets" not found` | The Secret was not created in that namespace | `kubectl -n <ns> create secret generic aegis-secrets ...` (Phase 6B.2) |
+| 28d | Ingress returns 504 / connection timeouts after enabling NetworkPolicy | The ingress controller runs in a namespace other than `networkPolicy.ingressControllerNamespace` | Set the right namespace in values (`kubectl get pods -A \| grep ingress`) |
 | 28b ✅ | SonarCloud: *"Specify a storage limit for this container"*; or in a cluster, pod `Evicted` with `The node was low on resource: ephemeral-storage` | No `ephemeral-storage` limit, so one pod's logs or temp files can fill the node disk and get **every** pod on that node evicted | Set `resources.requests/limits.ephemeral-storage` (256Mi / 1Gi in `values.yaml`) and `emptyDir.sizeLimit` on scratch volumes. Now only the offending pod is evicted |
 | 29 | `kubectl get hpa` shows `<unknown>/75%` | **metrics-server** not installed (or pods have no CPU requests) | Install metrics-server (Phase 6B.1); keep `resources.requests` set |
 | 30 ✅ | HTTPS never works; `kubectl get certificate` shows nothing | The Ingress had cert-manager annotations but **no `tls:` block**, so cert-manager had nothing to issue | **Fixed:** `ingress.tls` in `values.yaml` and the template |
@@ -584,10 +670,12 @@ Format: **Symptom**, then **Cause**, then **Fix**. Entries marked ✅ were repro
 | # | Symptom | Cause | Fix |
 | :--- | :--- | :--- | :--- |
 | 35 | `Error: No valid credential sources found` | AWS credentials not configured | `aws configure` / SSO login; in CI use OIDC (`aws-actions/configure-aws-credentials`) |
-| 36 | ECS task `STOPPED (ResourceInitializationError: unable to pull secrets or registry auth)` | Missing task execution role or no network path to ECR (private subnet without NAT or VPC endpoints) | Add the execution role, plus a NAT gateway or ECR/S3/Logs VPC endpoints |
-| 37 | `ClientException: ... log group does not exist` | `awslogs-group` not created | Add `aws_cloudwatch_log_group` |
+| 36 ✅ | `terraform validate`: `"egress.0.description" doesn't comply with restrictions` | AWS allows only certain characters in security group descriptions (an apostrophe broke it) | **Fixed** in `main.tf`. Always run `terraform validate` before `plan`; it catches this without an AWS account |
+| 37 | `Invalid value for variable ... must not open SSH to the whole internet` | `ssh_allowed_cidr = "0.0.0.0/0"` | Use your IP: `curl -s https://checkip.amazonaws.com`, then `x.x.x.x/32` |
+| 37b | `ssh: connect to host ... Connection timed out` | Your IP changed (home / mobile network) | Update `ssh_allowed_cidr` and `terraform apply` |
 | 38 | `Error acquiring the state lock` | Another `apply` running, or a crashed run left the lock | Wait; if certain it is stale: `terraform force-unlock <id>` |
-| 39 | Budget alarm emails right after deploy | `$5` budget is below Fargate + ALB cost | Expected for a demo; raise the budget or `terraform destroy` after recording a demo |
+| 38b | `Backend initialization required` | `terraform init` was run without `-backend-config=backend.hcl` | `terraform init -backend-config=backend.hcl` (or `-backend=false` just to validate) |
+| 39 | Budget alarm emails | Costs passed 80% of `monthly_budget_usd` | Check AWS Cost Explorer; `terraform destroy` demo environments you no longer need |
 
 ### Debugging method (what interviewers want to hear)
 
@@ -602,17 +690,16 @@ Format: **Symptom**, then **Cause**, then **Fix**. Entries marked ✅ were repro
 
 ## Production-readiness checklist
 
-- [x] Dockerfile: multi-stage, slim, non-root, healthcheck, graceful shutdown
-- [x] CI: lint, tests, eval gates, image build, smoke test, vulnerability scan, push by SHA
-- [x] Helm: probes (startup/readiness/liveness), resources, HPA, non-root + read-only security context, TLS Ingress
-- [x] GitOps: ArgoCD application with automated sync and self-heal
-- [x] Metrics endpoint with bounded label cardinality
-- [x] CORS configured from the environment
-- [ ] **Authentication/authorization** on `/v1/*` (API key or OAuth2/JWT); today anyone who can reach the API can trigger rollbacks and heavy eval jobs
-- [ ] Rate limiting (at the ingress or with `slowapi`)
-- [ ] Persistent shared state (Postgres/Redis) for incidents, HITL checkpoints and the retriever index
-- [ ] Structured JSON logs with request IDs, plus OTLP tracing
-- [ ] Alert rules (error rate, p95 latency) with runbook links
-- [ ] Complete Terraform (VPC, ALB, ECS service, IAM, logs, remote state) or EKS module
-- [ ] PodDisruptionBudget, NetworkPolicy, per-environment values files
-- [ ] Pinned dependency lock file (`pip-compile` / `uv lock`) for reproducible builds
+- [x] Dockerfile: multi-stage, slim, non-root, read-only, no pip, healthcheck, graceful shutdown
+- [x] Hashed dependency lock file; Dependabot for packages, actions and base image
+- [x] CI: lint, tests (incl. Postgres/Redis), eval gates, image build, multi-worker smoke test, vulnerability scan, push by SHA and release tag
+- [x] API key authentication on `/v1` and rate limits on heavy endpoints
+- [x] Shared state: HITL checkpoints in Postgres, baselines and rate-limit counters in Redis, unique incident IDs
+- [x] JSON logs with request IDs, optional OTLP tracing, Prometheus alert rules, provisioned Grafana dashboard
+- [x] Helm: probes, measured resources, HPA, PDB, NetworkPolicy, secrets, non-root + read-only, TLS Ingress, staging values
+- [x] GitOps: ArgoCD production and staging applications
+- [x] Terraform: complete single-VM deployment with remote state and a budget alarm (`terraform validate` passes)
+- [ ] Per-user identity for approvals (OAuth2/OIDC): today one shared API key, and `reviewer` is whatever the caller sends
+- [ ] Alertmanager receiver (Slack/PagerDuty) for the alert rules
+- [ ] Applying Helm/Terraform to a real cloud account (validated, not applied here)
+- [ ] Retriever index and incident reports in Postgres (runbooks are re-indexed at startup; reports are returned, not stored)

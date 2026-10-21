@@ -5,7 +5,10 @@ logger = logging.getLogger(__name__)
 
 
 class AegisMLflowTracker:
-    """Lightweight MLflow experiment tracker for AIOps models and RAG evaluations."""
+    """In-memory run tracker with an MLflow-like log_run API.
+
+    Does not use the mlflow package: runs are kept in a dict for the process lifetime.
+    """
 
     def __init__(self, experiment_name: str = "aegis-aiops-evaluations"):
         self.experiment_name = experiment_name

@@ -90,6 +90,14 @@ docker compose -f docker/docker-compose.yml ps
 
 ఇది Postgres, Redis, Prometheus, Grafana ని start చేస్తుంది. Ports కావాలనే వేరుగా పెట్టారు (5435, 6382, 9091, 3001), వేరే projects తో clash అవ్వకుండా.
 
+API వీటి లేకుండా కూడా నడుస్తుంది (అప్పుడు state process memory లో ఉంటుంది). Production లాగా వాడాలంటే:
+
+```bash
+export AEGIS_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db   # HITL checkpoints
+export AEGIS_REDIS_URL=redis://localhost:6382/0                                # baselines, rate limits
+export AEGIS_API_KEY=dev-key                                                    # optional: /v1 కి X-API-Key కావాలి
+```
+
 ### 1.4 API run చేయండి
 
 ```bash
@@ -110,6 +118,21 @@ Browser లో open చేయాల్సినవి:
 - మొదటి **20 events** కి `"status": "WARMING_UP"` వస్తుంది (ఇంకా నేర్చుకుంటోంది)
 - 21వ event నుండి `"status": "SCORED"`, అంటే ఇప్పుడు spike వస్తే `CRITICAL` అని చూపిస్తుంది
 - Anomaly events baseline లోకి వెళ్ళవు, కాబట్టి ఒక spike baseline ని పాడు చేయలేదు
+- `AEGIS_REDIS_URL` set చేస్తే baseline అన్ని workers / pods కి ఒకటే, restart అయినా పోదు
+
+### 1.6 Authentication, rate limits, human approval
+
+- `AEGIS_API_KEY` set చేస్తే ప్రతి `/v1` call కి `-H "X-API-Key: <key>"` కావాలి (లేకపోతే `401`). `/health`, `/metrics`, dashboard page open గానే ఉంటాయి; dashboard ఒక్కసారి key అడుగుతుంది.
+- Eval, pipeline, agent-start endpoints కి `AEGIS_HEAVY_RATE_LIMIT` (default `10/minute`) limit ఉంది, దాటితే `429`.
+
+```bash
+curl -s -X POST localhost:8000/v1/agent/incidents -H "content-type: application/json" \
+  -d '{"service_name":"rag-retrieval","description":"CUDA OOM critical"}'
+# -> "status": "AWAITING_APPROVAL", "thread_id": "inc-..."
+curl -s -X POST localhost:8000/v1/agent/incidents/<thread_id>/decision \
+  -H "content-type: application/json" -d '{"approved": true, "reviewer": "sre-lead"}'
+# -> "status": "COMPLETED"
+```
 
 ---
 
@@ -165,6 +188,9 @@ python eval/run_aiops_eval.py    # 20-fault chaos test (>= 95% రావాల�
 | `tests/test_phase4.py` | Kafka partitioning, DLQ, aggregator, dbt, Airflow SLA gate |
 | `tests/test_phase5.py` | Anomaly engine, RCA agent, FastAPI, Prometheus metrics |
 | `tests/test_regressions.py` | ఇంతకుముందు fix చేసిన bugs మళ్ళీ రాకుండా |
+| `tests/test_shared_state.py` | ఒక worker pause చేసిన incident ని **వేరే worker** approve చేయగలదా (Postgres), Redis baselines, unique incident IDs |
+| `tests/test_api_security.py` | Key లేకపోతే `401`, probes open, forged approval reject, `429` rate limit |
+| `tests/test_observability.py` | `X-Request-ID` మరియు JSON log lines |
 | `eval/test_eval_gates.py` | Faithfulness >= 0.85, recall >= 0.80, agent accuracy >= 90% |
 
 **Testing pyramid (companies వాడేది):**
@@ -174,7 +200,9 @@ python eval/run_aiops_eval.py    # 20-fault chaos test (>= 95% రావాల�
 
 **Regression test rule:** ప్రతి bug fix తో ఒక test రాయాలి. ఆ test **fix ముందు fail అవ్వాలి, fix తర్వాత pass అవ్వాలి**.
 
-⚠️ Tests run చేసినప్పుడు `data/analytics/daily_service_metrics.parquet` file మారుతుంది. Commit ముందు `git checkout data/` run చేయండి.
+Postgres / Redis tests కోసం `AEGIS_TEST_DATABASE_URL`, `AEGIS_TEST_REDIS_URL` set చేయండి (CI చేస్తుంది; local లో set చేయకపోతే skip అవుతాయి).
+
+`tests/conftest.py` ప్రతి test ముందు rate-limit counters reset చేస్తుంది, ETL output ని (`AEGIS_DATA_DIR`) temp folder కి పంపుతుంది. కాబట్టి tests ఇప్పుడు tracked `data/analytics/` file ని మార్చవు.
 
 ---
 
@@ -189,6 +217,7 @@ docker run --rm -p 8000:8000 --read-only --tmpfs /tmp \
   -e AEGIS_CORS_ORIGINS=http://localhost:8000 \
   aegis-api:local
 curl localhost:8000/health
+scripts/smoke_test.sh http://localhost:8000          # health + 5 HITL approvals
 ```
 
 ### Dockerfile లో ప్రతి నిర్ణయం ఎందుకు?
@@ -197,13 +226,15 @@ curl localhost:8000/health
 | :--- | :--- |
 | **Multi-stage build** | Build tools final image లోకి రావు, image చిన్నగా, safe గా ఉంటుంది |
 | **`python:3.12-slim`** | CI లో ఉన్న Python version, అనవసరమైన ~800 MB OS packages ఉండవు |
-| **`requirements-prod.txt`** | API కి torch అవసరం లేదు. దాన్ని తీసేయడం వల్ల image **~233 MB** మాత్రమే (లేకపోతే కొన్ని GB అయ్యేది) |
+| **`requirements-prod.txt`** | API కి torch అవసరం లేదు. దాన్ని తీసేయడం వల్ల image కొన్ని GB నుండి చాలా చిన్నది అయ్యింది |
+| **Lock file + hashes** (`requirements-prod.in` → `requirements-prod.txt`, `--require-hashes`) | ఒకే commit ఎప్పుడు build చేసినా ఒకే versions. ఎవరైనా package ని మార్చితే build fail అవుతుంది. `.in` మార్చాక: `pip-compile --generate-hashes --strip-extras requirements-prod.in -o requirements-prod.txt` (Python 3.12 తో) |
 | **Non-root user (UID 10001)** | Hacker app లోకి వచ్చినా root access ఉండదు |
 | **Code root-owned** | App user code ని చదవగలడు, మార్చలేడు |
 | **pip తీసేశాం** | pip లోపల bundle అయిన libraries లో 4 HIGH vulnerabilities ఉన్నాయి. Runtime లో pip అవసరం లేదు |
 | **`PYTHONUNBUFFERED=1`** | Logs వెంటనే `docker logs` లో కనిపిస్తాయి |
 | **`HEALTHCHECK`** | `/health` respond చేయకపోతే Docker `unhealthy` అని mark చేస్తుంది |
-| **gunicorn + uvicorn** | Worker crash అయితే gunicorn మళ్ళీ start చేస్తుంది, `SIGTERM` వస్తే graceful shutdown చేస్తుంది |
+| **gunicorn + uvicorn** | Worker crash అయితే gunicorn మళ్ళీ start చేస్తుంది, `SIGTERM` వస్తే graceful shutdown చేస్తుంది. `WEB_CONCURRENCY` default **1**: ఎక్కువ workers కి shared state (`AEGIS_DATABASE_URL`, `AEGIS_REDIS_URL`) కావాలి, production compose / Helm అవి ఇస్తాయి |
+| **`AEGIS_LOG_FORMAT=json`** | ప్రతి log line ఒక JSON object, `request_id` తో |
 | **`exec` in CMD** | Server PID 1 అవుతుంది, `SIGTERM` నేరుగా అందుతుంది |
 | **Read-only filesystem** | Hacker disk మీద code మార్చలేడు. `/tmp`, `/app/data` మాత్రమే writable |
 
@@ -231,10 +262,11 @@ File: `.github/workflows/ci.yml`. `main` కి push, ప్రతి Pull Reque
 ```
 Job 1: lint-and-test                Job 2: build-and-push-image (Job 1 pass అయ్యాక)
 ├─ Postgres + Redis containers     ├─ Docker image build (cache తో)
-├─ ruff check + format             ├─ Smoke test (read-only, /health)
-├─ pytest (అన్ని phases)           ├─ Trivy security scan
+├─ ruff check + format             ├─ Smoke test: 3 workers + Postgres + Redis + API key,
+├─ pytest (అన్ని phases)           │   scripts/smoke_test.sh (20 HITL approvals)
+├─ shared-state tests (PG/Redis)   ├─ Trivy security scan
 ├─ RAGAS / agent eval gates        ├─ GHCR login (PR లో కాదు)
-└─ 20-fault chaos test             └─ Push :<sha> (main లో :latest కూడా)
+└─ 20-fault chaos test             └─ Push :<sha>, main లో :latest, vX.Y.Z tag కి :X.Y.Z
 ```
 
 | Stage | ఎందుకు |
@@ -242,7 +274,9 @@ Job 1: lint-and-test                Job 2: build-and-push-image (Job 1 pass అ�
 | **ముందు lint** | చవకైన check ముందు, CI time ఆదా |
 | **Service containers** | CI లో నిజమైన Postgres / Redis, mocks కాదు |
 | **`concurrency: cancel-in-progress`** | కొత్త push వస్తే పాత run cancel అవుతుంది |
-| **Smoke test** | Unit tests pass అయినా container start అవుతుందని గ్యారంటీ లేదు (missing dependency, తప్పు CMD, permissions) |
+| **Smoke test** | Unit tests pass అయినా container start అవుతుందని గ్యారంటీ లేదు (missing dependency, తప్పు CMD, permissions). చాలా workers + నిజమైన Postgres / Redis తో run చేస్తేనే multi-worker bugs దొరుకుతాయి |
+| **Release tags** (`git tag v1.0.0 && git push origin v1.0.0`) | `:1.0.0` image publish అవుతుంది. Helm chart, `.env.example` ఇదే tag deploy చేస్తాయి |
+| **Dependabot** | ప్రతి వారం Python packages, GitHub Actions (SHA pins), base image updates కి PRs |
 | **Trivy scan** | తెలిసిన vulnerabilities ఉన్న packages prod కి వెళ్ళకుండా ఆపుతుంది |
 | **PR లో push చేయదు** | Forks నుండి వచ్చే PRs కి registry credentials ఇవ్వకూడదు |
 | **Actions SHA pinning** | `@v3` tag ని attacker మార్చగలడు, commit SHA ని మార్చలేడు |
@@ -261,15 +295,19 @@ Job 1: lint-and-test                Job 2: build-and-push-image (Job 1 pass అ�
 
 **ఎందుకు?** చవక, నిజమైన domain, నిజమైన HTTPS, live link resume లో పెట్టవచ్చు. Kubernetes వాడే image నే వాడుతుంది.
 
-Files: `docker/docker-compose.prod.yml`, `docker/Caddyfile`, `docker/prometheus.prod.yml`, `docker/.env.example`
+Files: `docker/docker-compose.prod.yml`, `docker/Caddyfile`, `docker/prometheus.prod.yml`, `docker/prometheus/alerts.yml`, `docker/grafana/`, `docker/.env.example`
 
 ```
-Internet ──443──> Caddy (auto Let's Encrypt HTTPS) ──> api:8000 ──> Prometheus ← Grafana (127.0.0.1 మాత్రమే)
+Internet ──443──> Caddy (auto HTTPS) ──> api:8000 (2 workers) ──> Postgres (HITL) + Redis (baselines, limits)
+                                            ▲
+                         Prometheus (alerts)┘ ← Grafana (127.0.0.1 మాత్రమే, dashboard ready)
 ```
+
+`.env` లో `IMAGE_TAG`, `DOMAIN`, `AEGIS_CORS_ORIGINS`, `AEGIS_API_KEY`, `POSTGRES_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` లేకపోతే stack start అవ్వదు (కావాలనే).
 
 **Steps:**
 
-1. **VM create చేయండి:** Ubuntu 24.04, 2 vCPU / 2 GB RAM (AWS `t3.small`, Hetzner CX22, Oracle free tier)
+1. **VM create చేయండి:** Ubuntu 24.04, 2 vCPU / 2 GB RAM (AWS `t3.small`, Hetzner CX22, Oracle free tier). Terraform తో steps 1, 2, 4 automatic: Option C చూడండి
 2. **Firewall:** 22 (SSH, మీ IP నుండి మాత్రమే), 80, 443 open చేయండి. 8000, 9090, 3001 **open చేయవద్దు**
 3. **DNS:** `aegis.yourdomain.com` → VM IP కి `A` record (DuckDNS free subdomain కూడా సరిపోతుంది)
 4. **Docker install:**
@@ -282,7 +320,7 @@ Internet ──443──> Caddy (auto Let's Encrypt HTTPS) ──> api:8000 ─�
    ```bash
    git clone https://github.com/Umanagalla27/aegis-enterprise-ai.git
    cd aegis-enterprise-ai/docker
-   cp .env.example .env && nano .env      # DOMAIN, AEGIS_CORS_ORIGINS, GRAFANA_ADMIN_PASSWORD, IMAGE_TAG
+   cp .env.example .env && nano .env      # అన్ని values; secrets: openssl rand -hex 32
    chmod 600 .env
    ```
 6. **Start:**
@@ -291,8 +329,8 @@ Internet ──443──> Caddy (auto Let's Encrypt HTTPS) ──> api:8000 ─�
    docker compose -f docker-compose.prod.yml ps
    docker compose -f docker-compose.prod.yml logs -f caddy    # certificate issue అవ్వడం చూడండి
    ```
-7. **Verify:** `curl https://aegis.yourdomain.com/health` run చేస్తే `HEALTHY` రావాలి. Grafana కోసం SSH tunnel: `ssh -L 3001:localhost:3001 ubuntu@<vm-ip>`, తర్వాత `http://localhost:3001`
-8. **కొత్త version:** `.env` లో `IMAGE_TAG=<new sha>` మార్చి `docker compose ... pull api && docker compose ... up -d api`
+7. **Verify:** `scripts/smoke_test.sh https://aegis.yourdomain.com "$AEGIS_API_KEY"` (health, key లేకపోతే `401`, HITL approvals). Grafana కోసం SSH tunnel: `ssh -L 3001:localhost:3001 ubuntu@<vm-ip>`, తర్వాత `http://localhost:3001` ("Aegis API - Golden Signals" dashboard ముందే ఉంటుంది)
+8. **కొత్త version:** `.env` లో `IMAGE_TAG=<new version / sha>` మార్చి `docker compose ... pull api && docker compose ... up -d api`, తర్వాత మళ్ళీ smoke test
 9. **Rollback:** పాత SHA పెట్టి మళ్ళీ అదే command
 
 ### 🅱️ Option B: Kubernetes + Helm + ArgoCD (Companies ఎక్కువగా వాడేది)
@@ -301,12 +339,14 @@ Internet ──443──> Caddy (auto Let's Encrypt HTTPS) ──> api:8000 ─�
 
 | File | పని |
 | :--- | :--- |
-| `templates/deployment.yaml` | Pods: image, env, probes, resources, non-root + read-only security, storage limits |
+| `templates/deployment.yaml` | Pods: image, env, secrets (API key, database / Redis URLs), probes, resources (measure చేసినవి: idle ~400 MiB, load లో ~475 MiB, అందుకే 512Mi / 1Gi), non-root + read-only, storage limits. Secret లేకుండా ఎక్కువ replicas కి **render అవ్వదు** |
 | `templates/service.yaml` | Pods ముందు stable internal IP మరియు DNS name |
 | `templates/ingress.yaml` | బయటి నుండి HTTPS traffic లోపలికి (cert-manager కోసం `tls:` block తో) |
 | `templates/hpa.yaml` | Load పెరిగితే 3 నుండి 10 pods వరకు auto-scale |
-| `values.yaml` | అన్ని settings. ప్రతి environment కి వేరే values file పెట్టవచ్చు |
-| `k8s/argocd/application.yaml` | ArgoCD `main` ని watch చేసి cluster ని sync చేస్తుంది |
+| `templates/pdb.yaml` | PodDisruptionBudget: node maintenance లో కనీసం 2 pods ఉంటాయి |
+| `templates/networkpolicy.yaml` | Ingress controller, Prometheus మాత్రమే pods కి connect అవ్వగలవు |
+| `values.yaml` / `values-staging.yaml` | Production values, దాని పైన staging overrides |
+| `k8s/argocd/application.yaml`, `application-staging.yaml` | ArgoCD `main` ని `aegis-production`, `aegis-staging` లోకి sync చేస్తుంది |
 
 **Probes (Interview లో తప్పకుండా అడుగుతారు):**
 
@@ -325,8 +365,10 @@ kind create cluster --name aegis
 docker build -t ghcr.io/umanagalla27/aegis-enterprise-ai:dev .
 kind load docker-image ghcr.io/umanagalla27/aegis-enterprise-ai:dev --name aegis
 helm lint k8s/helm/aegis-platform
+# Postgres / Redis లేకుండా 1 replica మాత్రమే (ఎక్కువ కి chart secret అడుగుతుంది)
 helm upgrade --install aegis k8s/helm/aegis-platform -n aegis --create-namespace \
-  --set image.tag=dev --set ingress.enabled=false
+  --set image.tag=dev --set ingress.enabled=false --set networkPolicy.enabled=false \
+  --set secrets.existingSecret= --set replicaCount=1 --set autoscaling.enabled=false
 kubectl -n aegis get pods -w
 kubectl -n aegis port-forward svc/aegis-aegis-platform 8000:8000
 curl localhost:8000/health
@@ -334,35 +376,44 @@ curl localhost:8000/health
 
 HPA పని చేయాలంటే **metrics-server** install చేయాలి (English guide లో commands ఉన్నాయి).
 
-**Real cluster (EKS లాంటిది) కోసం:** ingress-nginx, cert-manager + Let's Encrypt ClusterIssuer, ArgoCD install చేసి `kubectl apply -f k8s/argocd/application.yaml`. పూర్తి commands English guide Phase 6B.2 లో ఉన్నాయి.
+**Real cluster (EKS లాంటిది) కోసం:** ingress-nginx, cert-manager + Let's Encrypt ClusterIssuer, తర్వాత ప్రతి namespace లో secret:
 
-**GitOps లో deploy అంటే** `values.yaml` లో image tag మార్చి PR merge చేయడం. **Rollback అంటే** `git revert`.
+```bash
+kubectl -n aegis-production create secret generic aegis-secrets \
+  --from-literal=api-key="$(openssl rand -hex 32)" \
+  --from-literal=database-url='postgresql://USER:PASS@HOST:5432/aegis' \
+  --from-literal=redis-url='redis://HOST:6379/0'
+```
 
-**ఇంకా add చేయవచ్చు:** PodDisruptionBudget, NetworkPolicy, staging / prod కి వేరే values files, ServiceMonitor.
+తర్వాత ArgoCD install చేసి `kubectl apply -f k8s/argocd/application.yaml -f k8s/argocd/application-staging.yaml`. పూర్తి commands English guide Phase 6B.2 లో ఉన్నాయి.
 
-### 🅲 Option C: AWS ECS Fargate + Terraform
+**GitOps లో deploy అంటే:** కొత్త tag ని ముందు `values-staging.yaml` లో పెట్టి staging లో smoke test, తర్వాత అదే tag ని `values.yaml` (production) లోకి promote. **Rollback అంటే** `git revert`.
 
-⚠️ **నిజాయితీగా చెప్పాలంటే, ఇది incomplete.** Cluster, task definition, budget alarm మాత్రమే ఉన్నాయి. ఇవి missing:
+### 🅲 Option C: Terraform (AWS VM)
 
-| Missing | ఎందుకు కావాలి |
+`terraform/` Option A కోసం VM ని AWS లో **code తో** create చేస్తుంది (console లో click చేయనవసరం లేదు). ఇంతకుముందు ఉన్న ECS config లో service, IAM, network, load balancer లేవు, అది ఎప్పటికీ run అవ్వదు. దాన్ని దీనితో మార్చాం.
+
+| File | ఏమి create చేస్తుంది |
 | :--- | :--- |
-| `aws_ecs_service` | ఇది లేకుండా ఏ task కూడా run అవ్వదు |
-| IAM execution role | Image pull చేయడానికి, logs రాయడానికి |
-| CloudWatch log group | లేకపోతే `awslogs` driver fail అవుతుంది |
-| VPC, subnets, security groups, ALB, ACM certificate | Network మరియు HTTPS |
-| ECR repository | Task definition లో placeholder account `123456789012` ఉంది |
-| Remote state (S3 + DynamoDB) | Team తో share చేయడానికి, locking కోసం |
-
-**Cost గమనిక:** Budget $5 గా ఉంది, కానీ ఒక Fargate task (~$18) + ALB (~$16) కలిపి నెలకు ~$34 అవుతుంది. కాబట్టి alarm తప్పకుండా వస్తుంది. Demo తర్వాత `terraform destroy` చేయండి.
+| `main.tf` | Ubuntu 24.04 AMI, security group (SSH మీ IP నుండి మాత్రమే; 80/443 public), key pair, EC2 (IMDSv2, encrypted disk), Elastic IP |
+| `user_data.sh` | First boot లో Docker install, repo `/opt/aegis` కి clone (secrets మీరు SSH తో పెడతారు, Terraform లో కాదు) |
+| `budget_alarm.tf` | `monthly_budget_usd` (default 25) లో 80% / 100% దాటితే email |
+| `providers.tf` | AWS provider + **S3 remote state, native locking** (`use_lockfile`, Terraform >= 1.10) |
+| `outputs.tf` | DNS కోసం public IP, SSH command |
 
 ```bash
 cd terraform
-terraform init
+cp terraform.tfvars.example terraform.tfvars     # మీ IP/32, SSH public key, alert email
+cp backend.hcl.example backend.hcl               # మీ state bucket
+terraform init -backend-config=backend.hcl
 terraform fmt -check && terraform validate
-terraform plan -out tfplan       # ఏమి మారుతుందో ముందే చూడండి
-terraform apply tfplan
-terraform destroy                # billing ఆపడానికి
+terraform plan -out tfplan                       # ఏమి మారుతుందో ముందే చూడండి
+terraform apply tfplan                           # public_ip, ssh_command print అవుతాయి
+# DNS A record -> public_ip, తర్వాత VM లో Option A steps 5-7 (/opt/aegis/docker)
+terraform destroy                                # billing ఆపడానికి
 ```
+
+**Cost:** `t3.small` + 30 GB disk + Elastic IP నెలకు ~**$20** (us-east-1), అందుకే budget default $25. `ssh_allowed_cidr` ఎప్పుడూ `0.0.0.0/0` అవ్వకుండా validation ఉంది. `terraform validate` pass అయ్యింది. అది ఒక security group description లోని apostrophe ని పట్టుకుంది, AWS apply సమయంలో reject చేసేది.
 
 ---
 
@@ -370,8 +421,16 @@ terraform destroy                # billing ఆపడానికి
 
 | Setting | ఎక్కడ చదువుతుంది | ఉదాహరణ |
 | :--- | :--- | :--- |
+| `AEGIS_API_KEY` | `src/api/security.py` | Secret. Set చేస్తే `/v1` కి `X-API-Key` కావాలి. Production compose, Helm లో తప్పనిసరి |
+| `AEGIS_DATABASE_URL` | `src/agents/checkpointing.py` | `postgresql://...`: HITL checkpoints, అన్ని workers / pods కి ఒకటే |
+| `AEGIS_REDIS_URL` | `baseline_store.py`, `security.py` | `redis://...`: anomaly baselines, rate-limit counters |
+| `AEGIS_HEAVY_RATE_LIMIT` | `src/api/security.py` | Default `10/minute` (ఒక్కో client కి) |
 | `AEGIS_CORS_ORIGINS` | `src/api/main.py` | `https://aegis.yourdomain.com` (comma తో వేరు చేయండి; default `http://localhost:8000`) |
-| `WEB_CONCURRENCY` | `Dockerfile` CMD | gunicorn workers సంఖ్య |
+| `AEGIS_LOG_FORMAT` / `AEGIS_LOG_LEVEL` | `logging_config.py` | Image లో `json`, local లో `text` / `INFO` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel_instrumentation.py` | Jaeger / Tempo URL; set చేయకపోతే tracing off |
+| `AEGIS_DATA_DIR` | `batch_aggregator.py` | ETL output folder (default `data`) |
+| `FORWARDED_ALLOW_IPS` | uvicorn | Caddy / ingress వెనుక `*`, అప్పుడు rate limit నిజమైన client IP చూస్తుంది |
+| `WEB_CONCURRENCY` | `Dockerfile` CMD | gunicorn workers; default 1, database / Redis URLs ఉంటేనే పెంచండి |
 | `PORT` | `Dockerfile` CMD | `8000` |
 
 **Secrets rules (companies పాటించేవి):**
@@ -380,7 +439,7 @@ terraform destroy                # billing ఆపడానికి
 3. CI లో GitHub Secrets, లేదా OIDC (static keys అసలు ఉండవు)
 4. Leak అయితే **rotate చేయండి**. Git history నుండి delete చేస్తే సరిపోదు
 
-> Local `docker/docker-compose.yml` లో `password` / `admin` ఉన్నాయి. అది laptop లో మాత్రమే సరి. Production compose `.env` నుండి చదువుతుంది.
+> Local `docker/docker-compose.yml` default గా `password` / `admin` వాడుతుంది (`POSTGRES_PASSWORD` / `GRAFANA_ADMIN_PASSWORD` తో మార్చవచ్చు). అది laptop లో మాత్రమే సరి. Production compose లో defaults లేవు, values లేకపోతే start అవ్వదు.
 
 ---
 
@@ -414,12 +473,33 @@ histogram_quantile(0.95, sum by (le, endpoint) (rate(aegis_http_request_duration
 
 **Cardinality bug:** Raw URL ని label గా పెడితే ప్రతి random path (`/wp-admin`, `/.env`) కి కొత్త time series తయారవుతుంది, Prometheus memory అయిపోయి crash అవుతుంది. Fix: route template వాడండి, తెలియని paths కి `"unmatched"`.
 
+### Alerts & Dashboards (production compose stack లో)
+
+`docker/prometheus/alerts.yml` (`promtool check rules` pass):
+
+| Alert | ఎప్పుడు fire అవుతుంది |
+| :--- | :--- |
+| `AegisApiDown` | 2 నిమిషాలు API scrape అవ్వకపోతే (critical) |
+| `AegisHighErrorRate` | 5 నిమిషాలు 1% కంటే ఎక్కువ 5xx (critical) |
+| `AegisHighLatencyP95` | 10 నిమిషాలు p95 > 500 ms (warning) |
+| `AegisRateLimitedRequests` | 10 నిమిషాలు 429s ఎక్కువ (info) |
+| `AegisCriticalAnomalies` | 10 నిమిషాల్లో 5 కంటే ఎక్కువ CRITICAL anomalies (warning) |
+
+ప్రతి rule కి `runbook` annotation ఉంది. Grafana Prometheus datasource, "Aegis API - Golden Signals" dashboard తో ముందే ready గా start అవుతుంది. Notifications కావాలంటే Alertmanager + Slack / PagerDuty add చేయండి.
+
 ### Logs
-- Containers లో ఎప్పుడూ **stdout / stderr** కి log చేయండి. Platform (CloudWatch, Loki, ELK) collect చేస్తుంది
-- తర్వాతి step: request ID తో structured JSON logs
+
+Image **ప్రతి line ఒక JSON object** గా stdout కి log చేస్తుంది. ప్రతి request కి `X-Request-ID` (caller ఇచ్చింది లేదా కొత్తది) వస్తుంది: response header లో, ఆ request handle చేసేటప్పుడు వచ్చే ప్రతి log line లో:
+
+```json
+{"ts": "...", "level": "INFO", "logger": "aegis.access", "message": "request", "request_id": "c2c5f044...", "method": "POST", "path": "/v1/agent/incidents/{thread_id}/decision", "status": 200, "duration_ms": 28.74}
+```
+
+User error report చేస్తే `X-Request-ID` అడిగి, logs లో దాన్ని వెతకండి.
 
 ### Traces
-OpenTelemetry setup ఉంది కానీ console కి మాత్రమే, API కి connect చేయలేదు. Production లో Jaeger / Tempo కి OTLP export చేయాలి.
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` (ఉదా: `http://jaeger:4318`) set చేస్తే ప్రతి request ఒక span గా OTLP తో export అవుతుంది. Set చేయకపోతే tracing off.
 
 ### SLO ఉదాహరణ (Interview కోసం)
 > "30 రోజులకి 99.5% availability SLO అంటే ~3.6 hours error budget. Budget త్వరగా అయిపోతే feature deploys ఆపి reliability మీద పని చేస్తాం."
@@ -450,7 +530,9 @@ kubectl -n aegis rollout undo deploy/aegis-aegis-platform                 # Emer
 IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 ```
 
-**Database migrations:** Expand-and-contract pattern. కొత్త column add చేయండి, రెండింటిలో write చేసే code deploy చేయండి, backfill చేయండి, reads switch చేయండి, తర్వాత పాత column తీసేయండి. ప్రతి step backward compatible, కాబట్టి rollback ఎప్పుడూ break అవ్వదు.
+**Releases:** `git tag v1.1.0 && git push origin v1.1.0` → `:1.1.0` image. ముందు staging (`values-staging.yaml`) లో deploy చేసి `scripts/smoke_test.sh` run చేయండి, తర్వాత అదే tag ని production కి promote చేయండి.
+
+**Database migrations:** LangGraph checkpoint tables startup లో Postgres advisory lock తో create అవుతాయి. మీ సొంత tables కి Expand-and-contract pattern. కొత్త column add చేయండి, రెండింటిలో write చేసే code deploy చేయండి, backfill చేయండి, reads switch చేయండి, తర్వాత పాత column తీసేయండి. ప్రతి step backward compatible, కాబట్టి rollback ఎప్పుడూ break అవ్వదు.
 
 ---
 
@@ -478,9 +560,12 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 | `422 Unprocessable Entity` | Request body తప్పు | Response లోని `detail` చూడండి, అది ఏ field తప్పో చెప్తుంది. `/docs` లో schema చూడండి |
 | `405 Method Not Allowed` | POST endpoint కి GET పంపారు | `curl -X POST` |
 | ✅ Anomaly ఎప్పుడూ `NORMAL` | Engine train కాలేదు (z = 0) | Per-service rolling baseline, `WARMING_UP` status |
-| `WORKER TIMEOUT` (gunicorn) | Request 60 seconds కంటే ఎక్కువ పట్టింది | Long jobs ని queue లో పెట్టండి లేదా `--timeout` పెంచండి |
+| `WORKER TIMEOUT` (gunicorn) | Request 60 seconds కంటే ఎక్కువ పట్టింది | Measure చేశాం: heaviest endpoint ~1.4 s. ఇంకా పెద్ద jobs అయితే queue లో పెట్టండి |
 | Browser లో `CORS policy` error | Frontend origin `AEGIS_CORS_ORIGINS` లో లేదు | Exact origin (scheme + host + port) add చేయండి |
-| వేరే pods వేరే incident IDs ఇస్తాయి | State memory లో ఉంది (per process) | Postgres / Redis కి మార్చాలి |
+| ✅ Approval కి **404 "Unknown incident thread"** (2 workers తో 10 లో 3 సార్లు) | Paused incident ఒక worker memory (`MemorySaver`) లో ఉంది, approval వేరే worker కి వెళ్ళింది | **Fixed:** `AEGIS_DATABASE_URL` → `PostgresSaver`. 4 workers తో 20/20, restart తర్వాత కూడా పని చేస్తుంది. Incident IDs random, baselines Redis లో |
+| ✅ Startup లో worker crash: `UniqueViolation ... pg_type_typname_nsp_index` | చాలా workers ఒకేసారి `CREATE TABLE` run చేశాయి | **Fixed:** `pg_advisory_lock` తో ఒక్కరే tables create చేస్తారు |
+| `401 Missing or invalid API key` | `AEGIS_API_KEY` set అయ్యింది, header లేదు / తప్పు | `-H "X-API-Key: <key>"`; dashboard లో page reload చేసి key ఇవ్వండి |
+| `429 Too Many Requests` | Heavy endpoints కి limit దాటారు | ఒక నిమిషం ఆగండి. Proxy వెనుక `FORWARDED_ALLOW_IPS` set చేయండి |
 
 ### CI errors
 
@@ -491,6 +576,8 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 | ✅ Trivy HIGH CVEs (urllib3, msgpack, setuptools) | pip లోపల bundle అయిన libraries | Runtime image నుండి pip తీసేశాం |
 | ✅ SonarCloud "Use full commit SHA hash" | Actions `@v3` tags వాడాయి | ప్రతి action ని full SHA కి pin చేశాం |
 | GHCR push `denied` | `packages: write` permission లేదు | Job లో permission ఉంచండి |
+| ✅ Tests `data/analytics/...parquet` file మార్చాయి | ETL output tracked file కి వెళ్ళేది | **Fixed:** `AEGIS_DATA_DIR` temp folder (conftest) |
+| `THESE PACKAGES DO NOT MATCH THE HASHES` (docker build) | `requirements-prod.txt` ని చేతితో మార్చారు | `requirements-prod.in` మార్చి `pip-compile --generate-hashes` తో regenerate చేయండి |
 
 ### Docker errors
 
@@ -517,6 +604,9 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 | ✅ HTTPS certificate రాదు | Ingress లో `tls:` block లేదు | Add చేశాం |
 | Certificate `READY False` | DNS ఇంకా ingress కి point అవ్వలేదు, లేదా port 80 block | `kubectl describe challenge -A`, DNS / firewall fix |
 | ✅ `Evicted: ephemeral-storage` / SonarCloud "storage limit" | Disk limit లేదు | `ephemeral-storage` limits + `emptyDir.sizeLimit` |
+| ✅ `secrets.existingSecret is required with more than one replica` | Postgres / Redis లేకుండా ఎక్కువ replicas అంటే HITL break అవుతుంది | `aegis-secrets` create చేయండి, లేదా dev కి 1 replica |
+| `CreateContainerConfigError: secret "aegis-secrets" not found` | ఆ namespace లో secret లేదు | `kubectl -n <ns> create secret generic aegis-secrets ...` |
+| NetworkPolicy తర్వాత 504 / timeouts | Ingress controller వేరే namespace లో ఉంది | `networkPolicy.ingressControllerNamespace` సరిచేయండి |
 | ✅ ArgoCD `repository not found` | `repoURL` లో తప్పు username | `Umanagalla27` కి fix చేశాం |
 | ArgoCD `OutOfSync` (manual edit తర్వాత) | Self-heal manual changes ని revert చేస్తుంది | Cluster ని కాదు, Git ని మార్చండి |
 | `runAsNonRoot and image will run as root` | Image లో `USER` లేదు | Dockerfile లో `USER aegis` (UID 10001) ఉంది |
@@ -526,10 +616,12 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 | Error | కారణం | Fix |
 | :--- | :--- | :--- |
 | `No valid credential sources found` | AWS credentials లేవు | `aws configure` / SSO. CI లో OIDC |
-| ECS `ResourceInitializationError` | Execution role లేదు లేదా ECR కి network లేదు | Role + NAT / VPC endpoints |
-| `log group does not exist` | Log group create చేయలేదు | `aws_cloudwatch_log_group` add చేయండి |
+| ✅ `"egress.0.description" doesn't comply with restrictions` | Security group description లో apostrophe (AWS అంగీకరించదు) | **Fixed.** `plan` ముందు ఎప్పుడూ `terraform validate` run చేయండి |
+| `... must not open SSH to the whole internet` | `ssh_allowed_cidr = "0.0.0.0/0"` | మీ IP: `curl -s https://checkip.amazonaws.com` → `x.x.x.x/32` |
+| SSH `Connection timed out` | మీ IP మారింది | `ssh_allowed_cidr` update చేసి `terraform apply` |
 | `Error acquiring the state lock` | మరో `apply` నడుస్తోంది | వేచి ఉండండి. Stale అని ఖచ్చితంగా తెలిస్తేనే `terraform force-unlock` |
-| Deploy తర్వాత వెంటనే budget email | $5 budget, cost ~$34 | Demo కి expected. Budget పెంచండి లేదా `destroy` |
+| `Backend initialization required` | `-backend-config=backend.hcl` లేకుండా init | `terraform init -backend-config=backend.hcl` |
+| Budget email | Cost `monthly_budget_usd` లో 80% దాటింది | Cost Explorer చూడండి; అవసరం లేని demo ని `destroy` చేయండి |
 
 ### Debugging Method (Interviewers వినాలనుకునేది)
 
@@ -545,20 +637,19 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 ## Production-Readiness Checklist
 
 ✅ **పూర్తయినవి:**
-- [x] Dockerfile: multi-stage, slim, non-root, healthcheck, graceful shutdown, pip లేదు
-- [x] CI: lint, tests, eval gates, image build, smoke test, Trivy scan, SHA తో push
+- [x] Dockerfile: multi-stage, slim, non-root, read-only, pip లేదు, healthcheck, graceful shutdown
+- [x] Hashes తో lock file; Dependabot
+- [x] CI: lint, tests (Postgres / Redis తో), eval gates, image build, multi-worker smoke test, Trivy, SHA / release tag push
 - [x] CI security: actions SHA pinning, least-privilege token
-- [x] Helm: startup / readiness / liveness probes, resources, storage limits, HPA, non-root + read-only, TLS Ingress
-- [x] GitOps: ArgoCD automated sync + self-heal
-- [x] Bounded label cardinality తో metrics
-- [x] Environment నుండి CORS config
+- [x] `/v1` కి API key authentication, heavy endpoints కి rate limits
+- [x] Shared state: HITL Postgres లో, baselines / rate limits Redis లో, unique incident IDs
+- [x] Request IDs తో JSON logs, OTLP tracing, Prometheus alerts, Grafana dashboard
+- [x] Helm: probes, measured resources, HPA, PDB, NetworkPolicy, secrets, staging values, TLS Ingress
+- [x] GitOps: ArgoCD production + staging
+- [x] Terraform: complete VM deployment, remote state, budget alarm (`terraform validate` pass)
 
 ❌ **ఇంకా చేయాల్సినవి (Interview లో "next steps" గా చెప్పండి):**
-- [ ] **Authentication / authorization:** ఇప్పుడు API reach అయిన ఎవరైనా rollbacks, heavy eval jobs trigger చేయగలరు
-- [ ] Rate limiting
-- [ ] Shared state (Postgres / Redis): incidents, HITL checkpoints, retriever index ఇప్పుడు memory లో ఉన్నాయి
-- [ ] Request IDs తో structured JSON logs + OTLP tracing
-- [ ] Runbook links తో alert rules
-- [ ] Terraform complete చేయడం (VPC, ALB, ECS service, IAM, logs, remote state)
-- [ ] PodDisruptionBudget, NetworkPolicy, per-environment values files
-- [ ] Dependency lock file (`pip-compile` / `uv lock`)
+- [ ] Per-user login (OIDC) తో approvals: ఇప్పుడు ఒకే shared API key, `reviewer` caller పంపిందే
+- [ ] Alertmanager (Slack / PagerDuty) receiver
+- [ ] Helm / Terraform ని నిజమైన cloud account లో apply చేయడం (validate చేశాం, apply కాదు)
+- [ ] Retriever index, incident reports Postgres లో store చేయడం

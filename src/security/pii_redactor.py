@@ -10,7 +10,11 @@ class RedactionResult:
 
 
 class EnterprisePIIRedactor:
-    """Masks SSNs, credit cards, emails, phone numbers, and cloud secrets."""
+    """Regex-based masking of SSNs, credit cards, emails, phone numbers and API keys.
+
+    Pattern matching only (no NER model such as Microsoft Presidio), so paraphrased or
+    unusually formatted PII can slip through.
+    """
 
     PATTERNS = {
         "SSN": r"\b\d{3}-\d{2}-\d{4}\b",

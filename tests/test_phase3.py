@@ -3,7 +3,7 @@ from langgraph.types import Command
 from src.agents.graph import build_aegis_graph
 from src.agents.state import IncidentTicket
 from src.security.injection_defense import InjectionDefenseEngine
-from src.security.presidio_redactor import EnterprisePIIRedactor
+from src.security.pii_redactor import EnterprisePIIRedactor
 from src.security.tool_allowlist import ToolAccessController
 
 

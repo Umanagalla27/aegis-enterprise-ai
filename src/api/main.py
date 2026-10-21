@@ -39,7 +39,7 @@ from src.observability.prometheus_exporter import (
     get_prometheus_metrics,
 )
 from src.security.injection_defense import InjectionDefenseEngine
-from src.security.presidio_redactor import EnterprisePIIRedactor
+from src.security.pii_redactor import EnterprisePIIRedactor
 
 configure_logging()
 logger = logging.getLogger(__name__)

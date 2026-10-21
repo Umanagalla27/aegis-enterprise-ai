@@ -11,7 +11,7 @@ from src.mcp.server import (
     search_it_knowledge_base,
 )
 from src.security.injection_defense import InjectionDefenseEngine
-from src.security.presidio_redactor import EnterprisePIIRedactor
+from src.security.pii_redactor import EnterprisePIIRedactor
 from src.security.tool_allowlist import ToolAccessController
 
 
