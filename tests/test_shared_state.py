@@ -39,8 +39,7 @@ def test_incident_ids_are_unique_across_agent_instances():
     # Each gunicorn worker / pod builds its own agent; a per-process counter made
     # every one of them start at INC-0001.
     ids = {
-        RootCauseAnalysisAgent().diagnose_incident("api-gateway", {}).incident_id
-        for _ in range(50)
+        RootCauseAnalysisAgent().diagnose_incident("api-gateway", {}).incident_id for _ in range(50)
     }
     assert len(ids) == 50
 

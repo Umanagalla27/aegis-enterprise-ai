@@ -30,6 +30,8 @@ from src.api.security import (
 from src.mcp.server import graph_rag, retriever
 from src.observability.anomaly_engine import HybridAnomalyEngine
 from src.observability.baseline_store import build_baseline_store
+from src.observability.logging_config import configure_logging, request_id_var
+from src.observability.otel_instrumentation import setup_tracing
 from src.observability.prometheus_exporter import (
     ANOMALY_DETECTIONS_TOTAL,
     HTTP_REQUEST_DURATION_SECONDS,
@@ -39,7 +41,9 @@ from src.observability.prometheus_exporter import (
 from src.security.injection_defense import InjectionDefenseEngine
 from src.security.presidio_redactor import EnterprisePIIRedactor
 
+configure_logging()
 logger = logging.getLogger(__name__)
+access_logger = logging.getLogger("aegis.access")
 
 app = FastAPI(
     title="Aegis Enterprise AI Platform",
@@ -49,6 +53,7 @@ app = FastAPI(
     dependencies=[Depends(require_api_key)],
 )
 app.state.limiter = limiter
+setup_tracing(app)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 if not api_key_configured():
@@ -114,9 +119,17 @@ if not retriever.documents:
 # OpenTelemetry & Prometheus Middleware
 @app.middleware("http")
 async def monitor_requests(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    duration = time.time() - start_time
+    # Reuse the caller's / ingress's X-Request-ID so one ID follows the request across
+    # services; every log line written while handling it carries the same ID.
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = request_id_var.set(request_id)
+    start_time = time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    duration = time.perf_counter() - start_time
+    response.headers["X-Request-ID"] = request_id
 
     # Label by the route template ("/v1/agent/incidents/{thread_id}"), not the raw URL.
     # Raw paths create one time series per incident id (unbounded label cardinality).
@@ -133,6 +146,17 @@ async def monitor_requests(request: Request, call_next):
         endpoint=endpoint,
     ).observe(duration)
 
+    if endpoint not in ("/health", "/metrics"):  # probes and scrapes would drown the log
+        access_logger.info(
+            "request",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": endpoint,
+                "status": response.status_code,
+                "duration_ms": round(duration * 1000, 2),
+            },
+        )
     return response
 
 

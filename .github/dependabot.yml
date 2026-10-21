@@ -1,0 +1,24 @@
+# Weekly update PRs; each one runs the full CI (tests, image scan, smoke test).
+version: 2
+updates:
+  # requirements-prod.in -> regenerates the hashed requirements-prod.txt lock file
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Keeps the SHA-pinned actions current (and updates the version comments)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # python:3.12-slim base image security patches
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

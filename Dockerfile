@@ -6,10 +6,12 @@ FROM python:3.12-slim AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 
+# Exact versions + SHA-256 hashes (generated from requirements-prod.in): two builds of
+# the same commit get identical packages, and a tampered download fails the build.
 COPY requirements-prod.txt .
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install -r requirements-prod.txt \
+    && /opt/venv/bin/pip install --require-hashes --no-deps -r requirements-prod.txt \
     && /opt/venv/bin/python -m pip uninstall -y pip
 
 # ---- Stage 2: minimal runtime image ----
@@ -19,7 +21,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
     PORT=8000 \
-    WEB_CONCURRENCY=2
+    AEGIS_LOG_FORMAT=json \
+    # One worker unless AEGIS_DATABASE_URL / AEGIS_REDIS_URL give the workers shared
+    # state (the production compose file and Helm chart set both and raise this).
+    WEB_CONCURRENCY=1
 
 # Unprivileged user: a container escape or RCE does not land as root.
 # pip is removed: the service never installs packages at runtime, and pip's vendored
@@ -43,5 +48,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"
 
-# Gunicorn supervises Uvicorn workers: restarts crashed workers, graceful shutdown on SIGTERM
-CMD ["sh", "-c", "exec gunicorn src.api.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY} -b 0.0.0.0:${PORT} --timeout 60 --graceful-timeout 30 --access-logfile -"]
+# Gunicorn supervises Uvicorn workers: restarts crashed workers, graceful shutdown on SIGTERM.
+# Access logs come from the app (JSON, with request IDs), so gunicorn's own is off.
+CMD ["sh", "-c", "exec gunicorn src.api.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY} -b 0.0.0.0:${PORT} --timeout 60 --graceful-timeout 30"]

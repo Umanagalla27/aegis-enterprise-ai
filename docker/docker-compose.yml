@@ -5,7 +5,8 @@ services:
     container_name: aegis-postgres
     environment:
       POSTGRES_USER: uma
-      POSTGRES_PASSWORD: password
+      # Local development only; override with POSTGRES_PASSWORD=... in your shell or .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: aegis_db
     ports:
       - "5435:5432" # Port 5435 to avoid any collision with previous projects
@@ -19,14 +20,14 @@ services:
 
   # 2. Redis 7
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: aegis-redis
     ports:
       - "6382:6379" # Port 6382 to avoid collisions
 
   # 3. Prometheus
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     container_name: aegis-prometheus
     ports:
       - "9091:9090" # Port 9091 to avoid collisions
@@ -38,13 +39,13 @@ services:
 
   # 4. Grafana Dashboard
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.2.2
     container_name: aegis-grafana
     ports:
       - "3001:3000" # Port 3001 to avoid default collisions
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     depends_on:
       - prometheus

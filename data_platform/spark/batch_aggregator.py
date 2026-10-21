@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,10 +26,16 @@ class SparkBatchAggregator:
     with Parquet snappy compression.
     """
 
-    DEFAULT_OUTPUT_PATH = Path("data/analytics/daily_service_metrics.parquet")
+    # Relative to AEGIS_DATA_DIR (default "data"), so tests and read-only containers can
+    # point output at a scratch directory instead of the tracked sample file.
+    DEFAULT_OUTPUT_FILE = Path("analytics/daily_service_metrics.parquet")
+
+    @classmethod
+    def default_output_path(cls) -> Path:
+        return Path(os.getenv("AEGIS_DATA_DIR", "data")) / cls.DEFAULT_OUTPUT_FILE
 
     def __init__(self, output_path: str | Path | None = None):
-        self.output_path = Path(output_path or self.DEFAULT_OUTPUT_PATH)
+        self.output_path = Path(output_path or self.default_output_path())
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
     def aggregate_batch(self, records: list[dict[str, Any]] | pd.DataFrame) -> pd.DataFrame:
