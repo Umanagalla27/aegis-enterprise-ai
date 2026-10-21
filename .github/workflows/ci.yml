@@ -95,6 +95,11 @@ jobs:
           AEGIS_TEST_REDIS_URL: redis://localhost:6379/0
         run: pytest tests/test_shared_state.py tests/test_api_security.py tests/test_observability.py -v -rs
 
+      - name: Run Postgres Checkpointer Concurrency Tests (2 Workers, 20 Cycles)
+        env:
+          AEGIS_TEST_DATABASE_URL: postgresql://postgres@localhost:5432/aegis_db
+        run: pytest tests/test_postgres_checkpointer.py -v -s -rs
+
       - name: Run Phase 7 (RAGAS & Agent Regression Gates) Tests
         run: pytest eval/test_eval_gates.py -v
 

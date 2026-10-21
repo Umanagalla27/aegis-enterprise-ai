@@ -17,7 +17,7 @@ from eval.agent_evaluator import MultiAgentBenchmarkEvaluator
 from eval.ragas_evaluator import EnterpriseRagasEvaluator
 from eval.run_aiops_eval import evaluate_chaos
 from src.agents.checkpointing import build_checkpointer
-from src.agents.graph import build_aegis_graph
+from src.agents.graph import build_aegis_graph, thread_exists
 from src.agents.rca_agent import RootCauseAnalysisAgent
 from src.agents.state import IncidentTicket
 from src.api.dashboard import get_dashboard_html
@@ -532,8 +532,7 @@ def trigger_spark_aggregation(request: Request):
 
 def _require_known_thread(thread_id: str) -> None:
     """404 unless the checkpointer holds state for this incident thread."""
-    config = {"configurable": {"thread_id": thread_id}}
-    if not agent_app.get_state(config).values:
+    if not thread_exists(agent_app, thread_id):
         raise HTTPException(status_code=404, detail="Unknown incident thread")
 
 

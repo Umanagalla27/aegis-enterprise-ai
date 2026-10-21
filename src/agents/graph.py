@@ -165,3 +165,12 @@ def build_aegis_graph(checkpointer: BaseCheckpointSaver | None = None):
     workflow.add_edge("execution_node", END)
 
     return workflow.compile(checkpointer=checkpointer or MemorySaver())
+
+
+def thread_exists(app, thread_id: str) -> bool:
+    """True when the app's checkpointer holds state for this incident thread.
+
+    Reads the shared checkpointer (Postgres in production), so it gives the same
+    answer on every gunicorn worker and pod.
+    """
+    return bool(app.get_state({"configurable": {"thread_id": thread_id}}).values)
