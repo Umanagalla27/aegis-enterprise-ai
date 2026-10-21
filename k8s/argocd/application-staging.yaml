@@ -1,0 +1,28 @@
+# Staging: same chart and image as production, values-staging.yaml on top.
+# Promote a build by putting the tag verified here into values.yaml (production).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aegis-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/Umanagalla27/aegis-enterprise-ai.git'
+    targetRevision: main
+    path: k8s/helm/aegis-platform
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-staging.yaml
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: aegis-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

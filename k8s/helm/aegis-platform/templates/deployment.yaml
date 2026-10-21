@@ -1,3 +1,7 @@
+{{- $multiPod := or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1) }}
+{{- if and $multiPod (not .Values.secrets.existingSecret) }}
+{{- fail "secrets.existingSecret is required with more than one replica: HITL approvals and baselines must live in Postgres/Redis, not per-pod memory. For a single dev replica set replicaCount=1 and autoscaling.enabled=false." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +19,10 @@ spec:
     metadata:
       labels:
         {{- include "aegis-platform.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.service.targetPort | default 8000 | quote }}
+        prometheus.io/path: /metrics
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -40,6 +48,23 @@ spec:
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}
+            {{- end }}
+            {{- with .Values.secrets.existingSecret }}
+            - name: AEGIS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.apiKeyKey }}
+            - name: AEGIS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.databaseUrlKey }}
+            - name: AEGIS_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.redisUrlKey }}
             {{- end }}
           volumeMounts:
             # Writable paths on top of the read-only root filesystem
