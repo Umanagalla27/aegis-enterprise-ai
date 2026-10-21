@@ -154,7 +154,7 @@ jobs:
 
       - name: Smoke Test Container (3 workers, Postgres, Redis, API key)
         run: |
-          docker run -d --name aegis --network host --read-only --tmpfs /tmp \
+          docker run -d --name aegis --init --network host --read-only --tmpfs /tmp \
             --tmpfs /app/data:uid=10001,gid=10001 \
             -e WEB_CONCURRENCY=3 \
             -e AEGIS_API_KEY=ci-smoke-key \

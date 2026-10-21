@@ -12,6 +12,10 @@ services:
   api:
     image: ghcr.io/umanagalla27/aegis-enterprise-ai:${IMAGE_TAG:?set IMAGE_TAG in .env}
     restart: unless-stopped
+    # tini as PID 1 reaps stray processes (e.g. HEALTHCHECK probes that outlive their
+    # parent). Without it gunicorn is PID 1, reaps them itself and logs a misleading
+    # "Worker (pid:N) exited with code 1" for probes that ran before startup finished.
+    init: true
     read_only: true
     tmpfs:
       - /tmp

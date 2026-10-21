@@ -153,12 +153,18 @@ baseline_ready = metric_name in self.baseline_stats
 - **Result:** **20/20** approvals across 4 workers; a paused incident survives a full restart. CI now runs the image with 3 workers against real Postgres/Redis (`scripts/smoke_test.sh`), and `tests/test_shared_state.py` resumes an incident from a second graph instance.
 - **Lesson:** *"Workers and pods share nothing. Stateless app processes, state in a shared store. And test with more than one worker, because one worker hides this whole class of bugs."*
 
-### Bug 12: workers crashed at startup (race condition)
+### Bug 12: worker startup race, then a deadlock (two rounds)
 
-- **Situation:** with 4 workers, one crashed on boot: `psycopg.errors.UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`.
-- **Root cause:** every worker ran the checkpoint schema setup (`CREATE TABLE ...`) at the same instant; Postgres rejects concurrent creation of the same type.
-- **Action:** wrapped setup in a **`pg_advisory_lock`**, so one worker creates the tables and the rest wait, then find them already there.
-- **Lesson:** *"Startup migrations race when N replicas start together. Use a lock, or run migrations as a separate one-off job before the rollout."*
+- **Round 1, situation:** with 4 workers, one crashed on boot: `psycopg.errors.UniqueViolation: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`. Every worker ran the checkpoint schema setup (`CREATE TABLE ...`) at the same instant.
+- **Round 1, action:** wrapped setup in `pg_advisory_lock()`. Tests passed.
+- **Round 2, situation:** the full production stack on a **fresh** database came up `unhealthy`: every worker hung at startup until gunicorn killed it. `pg_stat_activity` showed one session in `CREATE INDEX CONCURRENTLY` and the others waiting in `pg_advisory_lock`.
+- **Root cause:** a deadlock Postgres cannot detect. `CREATE INDEX CONCURRENTLY` waits for every open transaction to finish, and a worker *blocked inside* `pg_advisory_lock()` is an open transaction that waits for the lock holder. My first fix had only passed because of lucky timing.
+- **Action:** waiting workers now **poll** `pg_try_advisory_lock()` with a short sleep, so they hold no transaction while waiting. A regression test starts 4 workers at once on a fresh schema: it fails ("worker startup deadlocked") on the old code and passes on the new one.
+- **Lesson:** *"A fix that passes once isn't proven: concurrency bugs depend on timing. Reproduce them deterministically in a test, and look at `pg_stat_activity` / wait events instead of guessing. In larger systems, run migrations as a one-off job before the rollout instead of in every replica."*
+
+### Bug 12b: a misleading "Worker exited with code 1"
+
+- Gunicorn logged `Worker (pid:21) exited with code 1` at startup, yet both workers kept running. Taking `/proc` snapshots during boot showed pid 21 was Docker's **HEALTHCHECK** probe: it ran before the app was ready, exited 1, and was re-parented to PID 1, which was gunicorn. Fix: `init: true` (tini as PID 1). *"Containers need a real init as PID 1, or something else ends up reaping zombies."*
 
 ### Bug 13: `terraform validate` caught an apply-time failure
 

@@ -90,3 +90,51 @@ def test_hitl_decision_can_be_resumed_by_another_worker(monkeypatch):
     final = worker_b.get_state(config)
     assert not final.next
     assert final.values["actions"][-1].status == "executed"
+
+
+@pytest.mark.skipif(not TEST_DATABASE_URL, reason="AEGIS_TEST_DATABASE_URL not set")
+def test_concurrent_worker_startup_on_fresh_database_does_not_deadlock(monkeypatch):
+    """Several workers creating the checkpoint schema at once used to crash
+    (UniqueViolation) and, with a blocking advisory lock, deadlock against
+    CREATE INDEX CONCURRENTLY so every worker hung until gunicorn killed it."""
+    import threading
+    import time
+    import uuid
+
+    import psycopg
+
+    from src.agents.checkpointing import build_checkpointer
+
+    schema = f"startup_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as admin:
+        admin.execute(f"CREATE SCHEMA {schema}")
+    separator = "&" if "?" in TEST_DATABASE_URL else "?"
+    monkeypatch.setenv(
+        "AEGIS_DATABASE_URL", f"{TEST_DATABASE_URL}{separator}options=-csearch_path%3D{schema}"
+    )
+
+    errors: list[BaseException] = []
+
+    def start_worker():
+        try:
+            build_checkpointer()
+        except BaseException as exc:  # surfaced in the assertion below
+            errors.append(exc)
+
+    workers = [threading.Thread(target=start_worker, daemon=True) for _ in range(4)]
+    try:
+        for worker in workers:
+            worker.start()
+        deadline = time.monotonic() + 60
+        for worker in workers:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        assert not any(w.is_alive() for w in workers), "worker startup deadlocked"
+        assert not errors, errors
+    finally:
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as admin:
+            # Hung workers would block DROP SCHEMA; end their sessions first.
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE pid <> pg_backend_pid() AND datname = current_database()"
+            )
+            admin.execute(f"DROP SCHEMA {schema} CASCADE")

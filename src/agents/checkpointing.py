@@ -6,6 +6,7 @@ so production uses Postgres. Local development and unit tests fall back to memor
 
 import logging
 import os
+import time
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 DATABASE_URL_ENV = "AEGIS_DATABASE_URL"
 # Arbitrary constant shared by all workers to serialise schema setup.
 SETUP_LOCK_ID = 7_340_001
+SETUP_LOCK_TIMEOUT_S = 120
+
+
+def _try_setup_lock(conn) -> bool:
+    return conn.execute("SELECT pg_try_advisory_lock(%s)", (SETUP_LOCK_ID,)).fetchone()[0]
 
 
 def build_checkpointer() -> BaseCheckpointSaver:
@@ -43,9 +49,18 @@ def build_checkpointer() -> BaseCheckpointSaver:
     saver = PostgresSaver(pool)
     # Creates the checkpoint tables on first start; a no-op afterwards. Every worker and
     # pod starts at the same time, and concurrent CREATE TABLE statements collide
-    # (UniqueViolation on pg_type), so setup runs under a cluster-wide advisory lock.
+    # (UniqueViolation on pg_type), so only the holder of an advisory lock runs setup.
+    #
+    # The others must poll instead of blocking in pg_advisory_lock(): setup runs
+    # CREATE INDEX CONCURRENTLY, which waits for every open transaction to finish, and a
+    # session blocked in pg_advisory_lock() is an open transaction waiting for the
+    # holder - a deadlock that hung every worker on a fresh database.
     with pool.connection() as lock_conn:
-        lock_conn.execute("SELECT pg_advisory_lock(%s)", (SETUP_LOCK_ID,))
+        deadline = time.monotonic() + SETUP_LOCK_TIMEOUT_S
+        while not _try_setup_lock(lock_conn):
+            if time.monotonic() > deadline:
+                raise TimeoutError("Timed out waiting for another worker's schema setup")
+            time.sleep(0.5)
         try:
             saver.setup()
         finally:

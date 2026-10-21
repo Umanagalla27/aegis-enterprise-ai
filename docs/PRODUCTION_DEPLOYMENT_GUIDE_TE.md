@@ -563,7 +563,9 @@ IMAGE_TAG=<old-sha> docker compose -f docker-compose.prod.yml up -d api   # VM
 | `WORKER TIMEOUT` (gunicorn) | Request 60 seconds కంటే ఎక్కువ పట్టింది | Measure చేశాం: heaviest endpoint ~1.4 s. ఇంకా పెద్ద jobs అయితే queue లో పెట్టండి |
 | Browser లో `CORS policy` error | Frontend origin `AEGIS_CORS_ORIGINS` లో లేదు | Exact origin (scheme + host + port) add చేయండి |
 | ✅ Approval కి **404 "Unknown incident thread"** (2 workers తో 10 లో 3 సార్లు) | Paused incident ఒక worker memory (`MemorySaver`) లో ఉంది, approval వేరే worker కి వెళ్ళింది | **Fixed:** `AEGIS_DATABASE_URL` → `PostgresSaver`. 4 workers తో 20/20, restart తర్వాత కూడా పని చేస్తుంది. Incident IDs random, baselines Redis లో |
-| ✅ Startup లో worker crash: `UniqueViolation ... pg_type_typname_nsp_index` | చాలా workers ఒకేసారి `CREATE TABLE` run చేశాయి | **Fixed:** `pg_advisory_lock` తో ఒక్కరే tables create చేస్తారు |
+| ✅ Startup లో worker crash: `UniqueViolation ... pg_type_typname_nsp_index` | చాలా workers ఒకేసారి `CREATE TABLE` run చేశాయి | **Fixed:** advisory lock ఉన్న worker మాత్రమే tables create చేస్తుంది |
+| ✅ **Fresh database** మీద అన్ని workers hang, container `unhealthy` | **Deadlock:** `CREATE INDEX CONCURRENTLY` అన్ని open transactions కోసం ఆగుతుంది, `pg_advisory_lock()` లో ఆగిన workers కూడా open transactions | **Fixed:** వేచి ఉండే workers `pg_try_advisory_lock()` తో poll చేస్తాయి (transaction లేకుండా) |
+| ✅ `Worker (pid:21) exited with code 1` కానీ workers నడుస్తున్నాయి | Docker HEALTHCHECK probe startup లో exit 1 అయ్యింది, PID 1 (gunicorn) దాన్ని worker అనుకుని log చేసింది | **Fixed:** compose లో `init: true` (tini PID 1 అవుతుంది) |
 | `401 Missing or invalid API key` | `AEGIS_API_KEY` set అయ్యింది, header లేదు / తప్పు | `-H "X-API-Key: <key>"`; dashboard లో page reload చేసి key ఇవ్వండి |
 | `429 Too Many Requests` | Heavy endpoints కి limit దాటారు | ఒక నిమిషం ఆగండి. Proxy వెనుక `FORWARDED_ALLOW_IPS` set చేయండి |
 
