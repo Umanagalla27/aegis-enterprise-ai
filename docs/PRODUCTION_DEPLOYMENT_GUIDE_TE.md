@@ -93,7 +93,8 @@ docker compose -f docker/docker-compose.yml ps
 API వీటి లేకుండా కూడా నడుస్తుంది (అప్పుడు state process memory లో ఉంటుంది). Production లాగా వాడాలంటే:
 
 ```bash
-export AEGIS_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db   # HITL checkpoints
+export AEGIS_DATABASE_URL=postgresql://uma@localhost:5435/aegis_db           # HITL checkpoints
+export PGPASSWORD=password                                                      # read by libpq; keeps it out of the URL
 export AEGIS_REDIS_URL=redis://localhost:6382/0                                # baselines, rate limits
 export AEGIS_API_KEY=dev-key                                                    # optional: /v1 కి X-API-Key కావాలి
 ```
@@ -381,7 +382,7 @@ HPA పని చేయాలంటే **metrics-server** install చేయా�
 ```bash
 kubectl -n aegis-production create secret generic aegis-secrets \
   --from-literal=api-key="$(openssl rand -hex 32)" \
-  --from-literal=database-url='postgresql://USER:PASS@HOST:5432/aegis' \
+  --from-literal=database-url="$AEGIS_DATABASE_URL" \
   --from-literal=redis-url='redis://HOST:6379/0'
 ```
 

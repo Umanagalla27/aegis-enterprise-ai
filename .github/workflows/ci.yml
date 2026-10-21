@@ -30,8 +30,9 @@ jobs:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
           POSTGRES_DB: aegis_db
+          # Throwaway CI database: trust auth, so no password exists to leak or hard-code
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -90,7 +91,7 @@ jobs:
       - name: Run Shared-State, API Security & Observability Tests
         env:
           # Service containers above; without these the Postgres/Redis tests skip.
-          AEGIS_TEST_DATABASE_URL: postgresql://postgres:password@localhost:5432/aegis_db
+          AEGIS_TEST_DATABASE_URL: postgresql://postgres@localhost:5432/aegis_db
           AEGIS_TEST_REDIS_URL: redis://localhost:6379/0
         run: pytest tests/test_shared_state.py tests/test_api_security.py tests/test_observability.py -v -rs
 
@@ -115,8 +116,9 @@ jobs:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
           POSTGRES_DB: aegis_db
+          # Throwaway CI database: trust auth, so no password exists to leak or hard-code
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -159,7 +161,7 @@ jobs:
             -e WEB_CONCURRENCY=3 \
             -e AEGIS_API_KEY=ci-smoke-key \
             -e AEGIS_HEAVY_RATE_LIMIT=100/minute \
-            -e AEGIS_DATABASE_URL=postgresql://postgres:password@localhost:5432/aegis_db \
+            -e AEGIS_DATABASE_URL=postgresql://postgres@localhost:5432/aegis_db \
             -e AEGIS_REDIS_URL=redis://localhost:6379/0 \
             aegis-api:ci
           scripts/smoke_test.sh http://localhost:8000 ci-smoke-key 20 || { docker logs aegis; exit 1; }

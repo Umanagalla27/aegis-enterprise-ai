@@ -24,7 +24,10 @@ services:
       AEGIS_API_KEY: ${AEGIS_API_KEY:?set AEGIS_API_KEY in .env}
       AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:?set AEGIS_CORS_ORIGINS in .env}
       # Shared state: lets several workers serve HITL approvals and share baselines.
-      AEGIS_DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aegis
+      # No password in the URL (it would show up in logs and error messages):
+      # libpq reads it from PGPASSWORD.
+      AEGIS_DATABASE_URL: postgresql://aegis@postgres:5432/aegis
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       AEGIS_REDIS_URL: redis://redis:6379/0
       WEB_CONCURRENCY: "2"
       # Only Caddy can reach the API, so trust its X-Forwarded-For for client IPs

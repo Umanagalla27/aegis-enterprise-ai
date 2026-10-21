@@ -19,7 +19,7 @@ env:
 # Secret with the keys below, created outside Git (kubectl, External Secrets, Vault):
 #   kubectl -n aegis-production create secret generic aegis-secrets \
 #     --from-literal=api-key="$(openssl rand -hex 32)" \
-#     --from-literal=database-url='postgresql://USER:PASS@HOST:5432/aegis' \
+#     --from-literal=database-url="$AEGIS_DATABASE_URL" \
 #     --from-literal=redis-url='redis://HOST:6379/0'
 # Several replicas or workers need it: HITL approvals, anomaly baselines and rate-limit
 # counters live in Postgres/Redis. Leave it empty only for a single replica (dev / kind).

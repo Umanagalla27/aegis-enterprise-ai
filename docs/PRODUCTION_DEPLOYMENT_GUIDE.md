@@ -94,7 +94,8 @@ Ports are deliberately non-default (5435, 6382, 9091, 3001) to avoid clashing wi
 The API works without them (state is then kept in process memory). To use them the way production does:
 
 ```bash
-export AEGIS_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db   # HITL checkpoints
+export AEGIS_DATABASE_URL=postgresql://uma@localhost:5435/aegis_db           # HITL checkpoints
+export PGPASSWORD=password                                                      # read by libpq; keeps it out of the URL
 export AEGIS_REDIS_URL=redis://localhost:6382/0                                # baselines, rate limits
 export AEGIS_API_KEY=dev-key                                                    # optional: require X-API-Key on /v1
 ```
@@ -215,7 +216,7 @@ python eval/run_aiops_eval.py   # 20-fault chaos benchmark (must stay >= 95%)
 The Postgres/Redis tests run when `AEGIS_TEST_DATABASE_URL` / `AEGIS_TEST_REDIS_URL` are set (CI sets them; locally they are skipped otherwise):
 
 ```bash
-AEGIS_TEST_DATABASE_URL=postgresql://uma:password@localhost:5435/aegis_db \
+PGPASSWORD=password AEGIS_TEST_DATABASE_URL=postgresql://uma@localhost:5435/aegis_db \
 AEGIS_TEST_REDIS_URL=redis://localhost:6382/1 pytest -q tests/test_shared_state.py
 ```
 
@@ -424,7 +425,7 @@ EOF
 kubectl create namespace aegis-production
 kubectl -n aegis-production create secret generic aegis-secrets \
   --from-literal=api-key="$(openssl rand -hex 32)" \
-  --from-literal=database-url='postgresql://USER:PASS@HOST:5432/aegis' \
+  --from-literal=database-url="$AEGIS_DATABASE_URL" \
   --from-literal=redis-url='redis://HOST:6379/0'
 # (same for aegis-staging with its own values; in companies: External Secrets Operator)
 
@@ -476,7 +477,7 @@ Cost: a `t3.small` with a 30 GB gp3 disk and an Elastic IP is roughly **$20/mont
 | Setting | Where it is read | Example |
 | :--- | :--- | :--- |
 | `AEGIS_API_KEY` | `src/api/security.py` | Secret; when set, `/v1` requires `X-API-Key`. Required by the production compose file and Helm chart |
-| `AEGIS_DATABASE_URL` | `src/agents/checkpointing.py` | `postgresql://user:pass@host:5432/aegis`: HITL checkpoints shared by all workers/pods |
+| `AEGIS_DATABASE_URL` | `src/agents/checkpointing.py` | `postgresql://user@host:5432/aegis` (password via `PGPASSWORD`, or inside the URL only when it comes from a secret store): HITL checkpoints shared by all workers/pods |
 | `AEGIS_REDIS_URL` | `src/observability/baseline_store.py`, `security.py` | `redis://host:6379/0`: anomaly baselines and rate-limit counters |
 | `AEGIS_HEAVY_RATE_LIMIT` | `src/api/security.py` | Default `10/minute` per client for eval, pipeline and agent-start endpoints |
 | `AEGIS_CORS_ORIGINS` | `src/api/main.py` | `https://aegis.yourdomain.com` (comma-separated; default `http://localhost:8000`). Credentials are always disabled |
