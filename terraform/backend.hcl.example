@@ -1,0 +1,10 @@
+# Copy to backend.hcl (keep it local; it names your state bucket).
+# Create the bucket once, by hand or with the AWS CLI:
+#   aws s3api create-bucket --bucket <your-unique-bucket> --region us-east-1
+#   aws s3api put-bucket-versioning --bucket <your-unique-bucket> \
+#     --versioning-configuration Status=Enabled
+bucket       = "your-unique-terraform-state-bucket"
+key          = "aegis/production/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true
