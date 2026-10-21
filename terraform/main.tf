@@ -71,8 +71,11 @@ resource "aws_instance" "aegis" {
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnets.default.ids[0]
   vpc_security_group_ids = [aws_security_group.aegis.id]
-  key_name               = aws_key_pair.admin.key_name
-  user_data              = file("${path.module}/user_data.sh")
+  # No auto-assigned public IP: the Elastic IP below is the server's only public address,
+  # so exactly one, deliberate, firewall-protected entry point exists.
+  associate_public_ip_address = false
+  key_name                    = aws_key_pair.admin.key_name
+  user_data                   = file("${path.module}/user_data.sh")
 
   # IMDSv2 only: blocks the SSRF-to-instance-credentials attack path.
   metadata_options {
