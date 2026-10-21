@@ -6,6 +6,8 @@ This guide covers how a team at a real company takes this repository from a lapt
 - **Why** companies do it (interviewers ask this).
 - **What breaks**, and how to fix it. The errors listed here were reproduced on this codebase, not made up.
 
+Telugu version: [PRODUCTION_DEPLOYMENT_GUIDE_TE.md](PRODUCTION_DEPLOYMENT_GUIDE_TE.md) (తెలుగు వివరణ).
+
 Companion document: [INTERVIEW_PREP.md](INTERVIEW_PREP.md) (resume bullets, project pitch, interview Q&A, and the bugs fixed in this project).
 
 ---

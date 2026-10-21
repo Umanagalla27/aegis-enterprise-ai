@@ -20,7 +20,7 @@
 
 ---
 
-> 📘 **Deploying to production?** See the [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT_GUIDE.md) (Docker, CI/CD, VM, Kubernetes/ArgoCD, troubleshooting catalog) and the [Interview Prep guide](docs/INTERVIEW_PREP.md).
+> 📘 **Deploying to production?** See the [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT_GUIDE.md) ([తెలుగు](docs/PRODUCTION_DEPLOYMENT_GUIDE_TE.md)) (Docker, CI/CD, VM, Kubernetes/ArgoCD, troubleshooting catalog) and the [Interview Prep guide](docs/INTERVIEW_PREP.md).
 
 ## 📑 Table of Contents
 - [Executive Overview](#-executive-overview)
