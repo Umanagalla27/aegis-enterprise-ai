@@ -14,3 +14,8 @@ pandas>=2.2.0,<3.0
 pyarrow>=17.0.0
 scikit-learn>=1.5.0,<2.0
 prometheus-client>=0.20.0,<1.0
+# Shared state across workers/pods (HITL checkpoints, baselines, rate-limit counters)
+langgraph-checkpoint-postgres>=2.0.0,<4.0
+psycopg[binary,pool]>=3.2.0,<4.0
+redis>=5.0.0,<9.0
+slowapi>=0.1.9,<0.2

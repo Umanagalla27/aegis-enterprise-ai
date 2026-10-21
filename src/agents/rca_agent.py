@@ -1,4 +1,5 @@
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,7 +36,6 @@ class RootCauseAnalysisAgent:
     }
 
     def __init__(self, topology: TopologicalGraphRAG | None = None):
-        self.incident_counter = 1
         self.topology = topology or TopologicalGraphRAG()
 
     def diagnose_incident(
@@ -46,8 +46,9 @@ class RootCauseAnalysisAgent:
         recent_commits: list[dict[str, str]] | None = None,
     ) -> IncidentReport:
         """Performs full root-cause investigation across metrics, logs, and deployment events."""
-        incident_id = f"INC-{self.incident_counter:04d}"
-        self.incident_counter += 1
+        # Random IDs: a per-process counter restarted at INC-0001 on every worker and pod,
+        # so different incidents shared the same ID.
+        incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
 
         recent_logs = recent_logs or []
         recent_commits = recent_commits or []

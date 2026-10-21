@@ -1,3 +1,4 @@
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -141,7 +142,7 @@ def check_security(state: AegisAgentState) -> str:
     return "quarantine" if state.get("security_flagged") else "triage"
 
 
-def build_aegis_graph():
+def build_aegis_graph(checkpointer: BaseCheckpointSaver | None = None):
     workflow = StateGraph(AegisAgentState)
 
     workflow.add_node("security_node", security_node)
@@ -163,5 +164,4 @@ def build_aegis_graph():
     workflow.add_edge("action_planning_node", "execution_node")
     workflow.add_edge("execution_node", END)
 
-    checkpointer = MemorySaver()
-    return workflow.compile(checkpointer=checkpointer)
+    return workflow.compile(checkpointer=checkpointer or MemorySaver())

@@ -19,6 +19,9 @@ tiktoken>=0.7.0
 
 # --- Agentic AI & MCP ---
 langgraph>=0.2.0
+langgraph-checkpoint-postgres>=2.0.0
+psycopg[binary,pool]>=3.2.0
+slowapi>=0.1.9
 mcp>=1.0.0
 
 # --- Machine Learning & Evaluation ---

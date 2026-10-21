@@ -1066,6 +1066,35 @@
   </div>
 
   <script>
+    // When the server sets AEGIS_API_KEY, every /v1 call needs an X-API-Key header.
+    // The key is asked for once (on the first 401) and kept for this browser tab only.
+    (() => {
+      const STORAGE_KEY = 'aegisApiKey';
+      const nativeFetch = window.fetch.bind(window);
+      let prompted = false;
+      const readKey = () => { try { return sessionStorage.getItem(STORAGE_KEY); } catch { return null; } };
+      const saveKey = (key) => { try { sessionStorage.setItem(STORAGE_KEY, key); } catch { /* private mode */ } };
+      const send = (input, init) => {
+        const headers = new Headers(init.headers || {});
+        const key = readKey();
+        if (key) headers.set('X-API-Key', key);
+        return nativeFetch(input, { ...init, headers });
+      };
+      window.fetch = async (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (!url.startsWith('/v1/')) return nativeFetch(input, init);
+        let res = await send(input, init);
+        if (res.status === 401 && !prompted) {
+          prompted = true;
+          const key = window.prompt('This Aegis server requires an API key (X-API-Key):');
+          if (key && key.trim()) {
+            saveKey(key.trim());
+            res = await send(input, init);
+          }
+        }
+        return res;
+      };
+    })();
     function switchTab(tabId) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
