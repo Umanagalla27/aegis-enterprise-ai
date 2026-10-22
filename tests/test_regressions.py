@@ -1,5 +1,10 @@
 """Regression tests for bugs found while tracing the project (see docs/WALKTHROUGH.md)."""
 
+import re
+import shutil
+import subprocess
+
+import pytest
 from fastapi.testclient import TestClient
 
 from eval.run_aiops_eval import evaluate_chaos
@@ -205,3 +210,17 @@ def test_prometheus_labels_use_route_template_not_raw_path():
     metrics = client.get("/metrics").text
     assert 'endpoint="/v1/agent/incidents/{thread_id}"' in metrics
     assert "some-random-id-123" not in metrics
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_dashboard_scripts_have_no_syntax_errors(tmp_path):
+    """Bug: a duplicated `const anomaly` was a SyntaxError, so the browser dropped the
+    whole script and no tab or button on the dashboard worked."""
+    html = client.get("/").text
+    scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
+    assert scripts
+    for i, source in enumerate(scripts):
+        path = tmp_path / f"inline_{i}.js"
+        path.write_text(source, encoding="utf-8")
+        result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr

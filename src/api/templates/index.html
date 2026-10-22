@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aegis Enterprise AI | Unified Production Platform</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%2300d2ff' d='M16 2 4 7v8c0 7.5 5.1 13.6 12 15 6.9-1.4 12-7.5 12-15V7z'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1250,7 +1251,6 @@
           <pre style="color:#a5b4fc; font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
           return;
         }
-        const anomaly = data.anomaly_result;
         const color = anomaly.severity === 'CRITICAL' ? 'var(--red)' : 
                       anomaly.severity === 'WARNING' ? 'var(--amber)' : 'var(--green)';
 
