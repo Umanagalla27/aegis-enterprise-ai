@@ -183,6 +183,13 @@ baseline_ready = metric_name in self.baseline_stats
 - API tests use `TestClient` and never run the page's JavaScript, so CI stayed green. Found by clicking through the page in a headless Chromium (Playwright). Fix: remove the duplicate; a regression test now runs `node --check` on every inline script of `/`.
 - *"Green API tests don't prove the UI works. Test what the user actually runs, at least a syntax check plus one browser smoke test."*
 
+### Bug 16: wrong input gave cryptic errors, and one value broke a service for good
+
+- Typing a bad value in the portal showed `Error: Cannot read properties of undefined`. The page read every response as a result without checking the status, so a 401, 422 or 429 body (`{"detail": ...}`) crashed the rendering. A wrong API key was also never asked for again until the tab was closed.
+- The API accepted any number. `1e309` parses to `inf`; it entered that service's baseline, and every later ingest for the service returned **500** (`Out of range float values are not JSON compliant`). With Redis baselines this survives restarts.
+- Fix: bounds on the request models (CPU/memory 0-100, latency ≥ 0, status 100-599, non-empty text), a 422 handler that can encode the rejected `inf`, readable messages per status in the page, the key prompt repeated on every 401, and all text HTML-escaped (typed `<img onerror=...>` had been inserted as HTML). Found by trying bad inputs in a headless browser; regression tests cover each case.
+- *"Validate at the boundary, and make every error say what to do next."*
+
 ---
 
 ## 6. Known limitations (say these before the interviewer finds them)

@@ -224,3 +224,38 @@ def test_dashboard_scripts_have_no_syntax_errors(tmp_path):
         path.write_text(source, encoding="utf-8")
         result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
+
+
+def test_telemetry_rejects_impossible_readings():
+    """Bug: any number was accepted, so a typo (CPU 150%, status 99999) entered the baseline."""
+    for field, value in [("cpu_percent", 150), ("memory_percent", -1), ("latency_ms", -5)]:
+        event = {**_telemetry("bounds-svc", 40.0), field: value}
+        res = client.post("/v1/telemetry/ingest", json=event)
+        assert res.status_code == 422, (field, res.text)
+    bad_status = {**_telemetry("bounds-svc", 40.0), "status_code": 99999}
+    assert client.post("/v1/telemetry/ingest", json=bad_status).status_code == 422
+
+
+def test_infinite_reading_is_a_422_and_does_not_poison_the_service():
+    """Bug: 1e309 parses to inf. It entered the baseline, and every later ingest for that
+    service failed with a 500; rejecting it then crashed the 422 response itself."""
+    service = "regression-inf-svc"
+    body = (
+        '{"service_name":"%s","cpu_percent":1e309,'
+        '"memory_percent":40,"latency_ms":45,"status_code":200}'
+    )
+    res = client.post(
+        "/v1/telemetry/ingest",
+        content=body % service,
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 422
+    assert res.json()["detail"][0]["loc"] == ["body", "cpu_percent"]
+    for i in range(TELEMETRY_WARMUP_EVENTS + 1):
+        res = client.post("/v1/telemetry/ingest", json=_telemetry(service, 40.0 + (i % 5)))
+        assert res.status_code == 200
+    assert res.json()["status"] == "SCORED"
+
+
+def test_rag_search_rejects_an_empty_query():
+    assert client.post("/v1/rag/search", json={"query": ""}).status_code == 422

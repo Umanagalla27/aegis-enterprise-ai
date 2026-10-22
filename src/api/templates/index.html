@@ -644,24 +644,24 @@
               </div>
               <div class="form-group">
                 <label>Status Code</label>
-                <input type="number" id="telemetryStatus" value="200" required>
+                <input type="number" id="telemetryStatus" value="200" min="100" max="599" step="1" required>
               </div>
             </div>
 
             <div class="form-row">
               <div class="form-group">
                 <label>Latency (ms)</label>
-                <input type="number" step="0.1" id="telemetryLatency" value="45.0" required>
+                <input type="number" step="any" id="telemetryLatency" value="45.0" min="0" max="600000" required>
               </div>
               <div class="form-group">
                 <label>CPU Utilization (%)</label>
-                <input type="number" step="0.1" id="telemetryCpu" value="35.0" required>
+                <input type="number" step="any" id="telemetryCpu" value="35.0" min="0" max="100" required>
               </div>
             </div>
 
             <div class="form-group">
               <label>Memory Utilization (%)</label>
-              <input type="number" step="0.1" id="telemetryMemory" value="48.0" required>
+              <input type="number" step="any" id="telemetryMemory" value="48.0" min="0" max="100" required>
             </div>
 
             <button type="submit" class="btn">
@@ -703,7 +703,7 @@
               </div>
               <div class="form-group">
                 <label>Observed Latency (ms)</label>
-                <input type="number" step="0.1" id="rcaLatency" value="2800.0" required>
+                <input type="number" step="any" id="rcaLatency" value="2800.0" min="0" max="600000" required>
               </div>
             </div>
 
@@ -752,7 +752,7 @@
           <form class="tool-form" onsubmit="event.preventDefault(); submitRag();">
             <div class="form-group">
               <label>Runbook Query</label>
-              <input type="text" id="ragQuery" value="How to fix GPU CUDA Out of Memory?" required>
+              <input type="text" id="ragQuery" value="How to fix GPU CUDA Out of Memory?" maxlength="1000" required>
             </div>
             <button type="submit" class="btn" style="background: linear-gradient(135deg, var(--blue), #00c4cc); color: #fff;">
               Query Knowledge Base
@@ -819,7 +819,7 @@
           <form class="tool-form" onsubmit="event.preventDefault(); submitSecurity();">
             <div class="form-group">
               <label>Agent Input Prompt</label>
-              <textarea id="secInput" rows="3" required>Contact admin at support@company.com with SSN 000-11-2222.</textarea>
+              <textarea id="secInput" rows="3" maxlength="10000" required>Contact admin at support@company.com with SSN 000-11-2222.</textarea>
             </div>
             <button type="submit" class="btn" style="background: linear-gradient(135deg, var(--amber), #f72585); color: #000;">
               Inspect & Guardrail Prompt
@@ -1072,7 +1072,6 @@
     (() => {
       const STORAGE_KEY = 'aegisApiKey';
       const nativeFetch = window.fetch.bind(window);
-      let prompted = false;
       const readKey = () => { try { return sessionStorage.getItem(STORAGE_KEY); } catch { return null; } };
       const saveKey = (key) => { try { sessionStorage.setItem(STORAGE_KEY, key); } catch { /* private mode */ } };
       const send = (input, init) => {
@@ -1085,17 +1084,51 @@
         const url = typeof input === 'string' ? input : input.url;
         if (!url.startsWith('/v1/')) return nativeFetch(input, init);
         let res = await send(input, init);
-        if (res.status === 401 && !prompted) {
-          prompted = true;
-          const key = window.prompt('This Aegis server requires an API key (X-API-Key):');
-          if (key && key.trim()) {
-            saveKey(key.trim());
-            res = await send(input, init);
-          }
+        // Ask again while the key is rejected (a typo used to stick until the tab closed)
+        for (let attempt = 0; res.status === 401 && attempt < 3; attempt++) {
+          const question = readKey()
+            ? 'That API key was rejected. Enter the correct X-API-Key:'
+            : 'This Aegis server requires an API key (X-API-Key):';
+          const key = window.prompt(question);
+          if (!key || !key.trim()) break;
+          saveKey(key.trim());
+          res = await send(input, init);
         }
         return res;
       };
     })();
+    // Escapes text before it goes into innerHTML, so typed input like "<b>" shows as text.
+    function esc(value) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      return String(value ?? '').replace(/[&<>"']/g, c => map[c]);
+    }
+
+    // Error bodies ({"detail": ...}) have none of the result fields, so reading them as a
+    // result crashed with "Cannot read properties of undefined". Explain the status instead.
+    async function readJson(res) {
+      let data = null;
+      try { data = await res.json(); } catch { /* empty or non-JSON body */ }
+      if (res.ok) return data;
+      let message;
+      if (res.status === 401) {
+        message = 'API key missing or wrong. Try again and enter the key the server was started with (AEGIS_API_KEY).';
+      } else if (res.status === 422 && Array.isArray(data?.detail)) {
+        message = 'Invalid input: ' + data.detail.map(d => `${d.loc.slice(1).join('.') || 'request'}: ${d.msg}`).join('; ');
+      } else if (res.status === 429) {
+        message = 'Too many requests: this action is rate limited. Wait a minute and try again.';
+      } else {
+        message = `Server error ${res.status}${data?.detail ? ': ' + data.detail : ''}. Check the API terminal for the traceback.`;
+      }
+      throw new Error(message);
+    }
+
+    function errorHtml(err) {
+      const message = err instanceof TypeError && /fetch/i.test(err.message)
+        ? 'Cannot reach the API. Is the server (uvicorn) still running?'
+        : err.message;
+      return `<span style="color:var(--red)">Error: ${esc(message)}</span>`;
+    }
+
     function switchTab(tabId) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -1111,7 +1144,7 @@
       const tbody = document.getElementById('servicesTableBody');
       try {
         const res = await fetch('/v1/services/status');
-        const data = await res.json();
+        const data = await readJson(res);
         const s = data.services;
 
         tbody.innerHTML = `
@@ -1180,7 +1213,7 @@
           </tr>
         `;
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="5" style="color:var(--red);">Error checking services: ${err.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5">${errorHtml(err)}</td></tr>`;
       }
     }
 
@@ -1237,7 +1270,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
+        const data = await readJson(res);
         const anomaly = data.anomaly_result;
         if (!anomaly) {
           box.innerHTML = `
@@ -1248,7 +1281,7 @@
           <div style="color:var(--text-muted); font-size:12px; margin-bottom:8px;">
             Send more normal events for this service before anomalies can be scored.
           </div>
-          <pre style="color:#a5b4fc; font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
+          <pre style="color:#a5b4fc; font-size:11px;">${esc(JSON.stringify(data, null, 2))}</pre>`;
           return;
         }
         const color = anomaly.severity === 'CRITICAL' ? 'var(--red)' : 
@@ -1261,11 +1294,11 @@
             &bull; Confidence: <strong>${(anomaly.confidence * 100).toFixed(0)}%</strong>
           </div>
           <div style="color:var(--text-muted); font-size:12px; margin-bottom:8px;">
-            Metric: ${anomaly.metric_name} | Observed: ${anomaly.observed_value} | Baseline Mean: ${anomaly.baseline_mean} | Z-Score: ${anomaly.details.z_score || 0}
+            Metric: ${esc(anomaly.metric_name)} | Observed: ${esc(anomaly.observed_value)} | Baseline Mean: ${esc(anomaly.baseline_mean)} | Z-Score: ${esc(anomaly.details?.z_score ?? 0)}
           </div>
-          <pre style="color:#a5b4fc; font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
+          <pre style="color:#a5b4fc; font-size:11px;">${esc(JSON.stringify(data, null, 2))}</pre>`;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1292,32 +1325,32 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
+        const data = await readJson(res);
         const r = data.report;
         const sevColor = r.severity === 'P1' ? 'var(--red)' : 'var(--amber)';
 
         box.innerHTML = `
           <div style="margin-bottom:8px;">
-            <span style="background:${sevColor}; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700; font-size:11px;">${r.severity}</span>
-            <strong style="margin-left:6px; color:#fff;">${r.incident_id}</strong>: ${r.service_name}
+            <span style="background:${sevColor}; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700; font-size:11px;">${esc(r.severity)}</span>
+            <strong style="margin-left:6px; color:#fff;">${esc(r.incident_id)}</strong>: ${esc(r.service_name)}
           </div>
           <div style="color:var(--text); margin-bottom:8px; font-size:12px;">
-            <strong>Hypothesis:</strong> ${r.root_cause_summary}
+            <strong>Hypothesis:</strong> ${esc(r.root_cause_summary)}
           </div>
           <div style="color:var(--cyan); font-size:12px; margin-bottom:6px;">
-            <strong>Recommended Runbook:</strong> <code>${r.recommended_runbook}</code>
+            <strong>Recommended Runbook:</strong> <code>${esc(r.recommended_runbook)}</code>
           </div>
           <div style="color:var(--text-muted); font-size:11px; margin-bottom:8px;">
-            <strong>Blast Radius:</strong> ${r.blast_radius.map(s => `<span style="background:rgba(255,255,255,0.08); padding:1px 6px; border-radius:4px; margin-right:4px;">${s}</span>`).join('')}
+            <strong>Blast Radius:</strong> ${r.blast_radius.map(s => `<span style="background:rgba(255,255,255,0.08); padding:1px 6px; border-radius:4px; margin-right:4px;">${esc(s)}</span>`).join('')}
           </div>
           <div style="font-size:11px; color:#c7d2fe;">
             <strong>Action Plan:</strong>
             <ul style="padding-left:18px; margin-top:4px;">
-              ${r.action_plan.map(step => `<li>${step}</li>`).join('')}
+              ${r.action_plan.map(step => `<li>${esc(step)}</li>`).join('')}
             </ul>
           </div>`;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1333,18 +1366,22 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: query, top_k: 2 })
         });
-        const data = await res.json();
+        const data = await readJson(res);
+        if (!data.results.length) {
+          box.innerHTML = '<span style="color:var(--amber)">No runbook matched this query. Try words such as GPU, memory, database, timeout or latency.</span>';
+          return;
+        }
         box.innerHTML = `
           <div style="color:var(--cyan); margin-bottom:8px;">Retrieved ${data.results.length} runbooks (BM25 + Dense RRF):</div>
           ${data.results.map(r => `
             <div style="background:rgba(255,255,255,0.04); padding:8px 12px; border-radius:8px; margin-bottom:6px;">
-              <span style="color:var(--amber); font-weight:600;">[${r.chunk_id}]</span> 
-              <span style="color:#e2e8f0;">${r.text}</span>
+              <span style="color:var(--amber); font-weight:600;">[${esc(r.chunk_id)}]</span> 
+              <span style="color:#e2e8f0;">${esc(r.text)}</span>
             </div>
           `).join('')}
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1355,20 +1392,20 @@
 
       try {
         const res = await fetch('/v1/rag/topology?service_name=' + encodeURIComponent(svc), { method: 'POST' });
-        const data = await res.json();
+        const data = await readJson(res);
         box.innerHTML = `
-          <div style="margin-bottom:8px;">Service: <strong style="color:var(--cyan);">${data.service}</strong></div>
+          <div style="margin-bottom:8px;">Service: <strong style="color:var(--cyan);">${esc(data.service)}</strong></div>
           <div style="margin-bottom:6px; color:var(--text-muted);">
             Upstream Required Dependencies: 
-            ${data.dependencies.length ? data.dependencies.map(d => `<span class="code-pill" style="margin:2px;">${d}</span>`).join(' ') : '<em>None</em>'}
+            ${data.dependencies.length ? data.dependencies.map(d => `<span class="code-pill" style="margin:2px;">${esc(d)}</span>`).join(' ') : '<em>None</em>'}
           </div>
           <div style="color:var(--red);">
             Cascade Blast Radius (Downstream Failures): 
-            ${data.blast_radius.length ? data.blast_radius.map(b => `<span class="code-pill" style="color:var(--red); border-color:rgba(255,51,102,0.3); margin:2px;">${b}</span>`).join(' ') : '<em>Self-contained</em>'}
+            ${data.blast_radius.length ? data.blast_radius.map(b => `<span class="code-pill" style="color:var(--red); border-color:rgba(255,51,102,0.3); margin:2px;">${esc(b)}</span>`).join(' ') : '<em>Self-contained</em>'}
           </div>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1384,23 +1421,23 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: text })
         });
-        const data = await res.json();
+        const data = await readJson(res);
         const statusColor = data.is_adversarial ? 'var(--red)' : 'var(--green)';
 
         box.innerHTML = `
           <div style="margin-bottom:8px;">
             Adversarial Attack: <strong style="color:${statusColor}">${data.is_adversarial ? 'DETECTED & QUARANTINED' : 'CLEAN'}</strong>
-            ${data.is_adversarial ? `<div style="color:var(--red); font-size:11px; margin-top:2px;">${data.attack_reason}</div>` : ''}
+            ${data.is_adversarial ? `<div style="color:var(--red); font-size:11px; margin-top:2px;">${esc(data.attack_reason)}</div>` : ''}
           </div>
           <div style="margin-bottom:6px; color:var(--text-muted);">
-            Redacted Sensitive Entities Count: <strong>${data.redacted_count}</strong> (${data.detected_entities.join(', ') || 'None'})
+            Redacted Sensitive Entities Count: <strong>${data.redacted_count}</strong> (${esc(data.detected_entities.join(', ')) || 'None'})
           </div>
           <div style="background:rgba(0,0,0,0.4); padding:8px; border-radius:6px; color:var(--cyan);">
-            <strong>Sanitized Output:</strong><br>${data.redacted_text}
+            <strong>Sanitized Output:</strong><br>${esc(data.redacted_text)}
           </div>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1411,7 +1448,7 @@
 
       try {
         const res = await fetch('/v1/eval/chaos', { method: 'POST' });
-        const data = await res.json();
+        const data = await readJson(res);
         box.innerHTML = `
           <div style="color:${data.passed ? 'var(--green)' : 'var(--red)'}; font-weight:700; margin-bottom:8px;">
             CHAOS BENCHMARK COMPLETE: ${data.passed ? 'PASS' : 'FAIL'}
@@ -1423,7 +1460,7 @@
           <div style="margin-top:8px; font-size:11px; color:var(--text-muted);">Fault categories: ${data.fault_types.join(', ')}</div>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1434,7 +1471,7 @@
 
       try {
         const res = await fetch('/v1/eval/ragas', { method: 'POST' });
-        const data = await res.json();
+        const data = await readJson(res);
         box.innerHTML = `
           <div style="color:${data.passed_gate ? 'var(--green)' : 'var(--red)'}; font-weight:700; margin-bottom:8px;">
             RAGAS GATE ${data.passed_gate ? 'PASSED' : 'FAILED'} (lexical-overlap proxy, strict thresholds)
@@ -1444,11 +1481,11 @@
           <div>Answer Relevance: <strong>${(data.answer_relevance * 100).toFixed(1)}%</strong></div>
           <div>Context Precision: <strong>${(data.context_precision * 100).toFixed(1)}%</strong></div>
           <div style="margin-top:8px; font-size:11px; color:var(--text-muted);">
-            ${data.per_sample.map(x => `${x.query} &rarr; faithfulness ${(x.faithfulness*100).toFixed(0)}%, recall ${(x.context_recall*100).toFixed(0)}%`).join('<br>')}
+            ${data.per_sample.map(x => `${esc(x.query)} &rarr; faithfulness ${(x.faithfulness*100).toFixed(0)}%, recall ${(x.context_recall*100).toFixed(0)}%`).join('<br>')}
           </div>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1459,7 +1496,7 @@
 
       try {
         const res = await fetch('/v1/airflow/run-etl', { method: 'POST' });
-        const data = await res.json();
+        const data = await readJson(res);
         const gate = data.gate_evaluation;
         const spark = data.spark_summary[0] || {};
         const dbt = data.dbt_marts_summary[0] || {};
@@ -1479,7 +1516,7 @@
           </div>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 
@@ -1490,12 +1527,12 @@
 
       try {
         const res = await fetch('/v1/spark/aggregate', { method: 'POST' });
-        const data = await res.json();
+        const data = await readJson(res);
         const rows = data.aggregated_metrics || [];
 
         let rowsHtml = rows.map(r => `
           <tr>
-            <td style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600; color:var(--cyan);">${r.service_name}</td>
+            <td style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.05); font-weight:600; color:var(--cyan);">${esc(r.service_name)}</td>
             <td style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.05);">${r.total_requests}</td>
             <td style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.05); color:${r.availability_sla >= 99 ? 'var(--green)' : 'var(--amber)'}; font-weight:700;">${r.availability_sla.toFixed(1)}%</td>
             <td style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.05);">${r.latency_p50_ms.toFixed(1)}ms</td>
@@ -1523,7 +1560,7 @@
           </table>
         `;
       } catch (err) {
-        box.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
+        box.innerHTML = errorHtml(err);
       }
     }
 

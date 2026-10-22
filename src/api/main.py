@@ -1,13 +1,17 @@
 import logging
+import math
 import os
 import socket
 import time
 import uuid
 from dataclasses import asdict
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 from slowapi import _rate_limit_exceeded_handler
@@ -55,6 +59,25 @@ app = FastAPI(
 app.state.limiter = limiter
 setup_tracing(app)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 with the bad input echoed as text: the default handler echoed a JSON 1e309 as
+    inf, which cannot be encoded, so the validation error itself became a 500."""
+    detail = _json_safe(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": detail})
+
 
 if not api_key_configured():
     logger.warning("AEGIS_API_KEY is not set: /v1 endpoints accept unauthenticated calls.")
@@ -169,19 +192,25 @@ def _is_port_open(host: str, port: int, timeout: float = 0.25) -> bool:
         return False
 
 
+# Bounds keep impossible readings out of the rolling baselines: one 1e309 (inf) used to
+# poison a service's window, and every later ingest for it failed with a 500.
+ServiceName = Annotated[str, Field(min_length=1, max_length=100)]
+MAX_LATENCY_MS = 600_000
+
+
 class TelemetryEvent(BaseModel):
-    service_name: str
-    cpu_percent: float
-    memory_percent: float
-    latency_ms: float
-    status_code: int
+    service_name: ServiceName
+    cpu_percent: float = Field(ge=0, le=100, allow_inf_nan=False)
+    memory_percent: float = Field(ge=0, le=100, allow_inf_nan=False)
+    latency_ms: float = Field(ge=0, le=MAX_LATENCY_MS, allow_inf_nan=False)
+    status_code: int = Field(ge=100, le=599)
 
 
 class DiagnoseRequest(BaseModel):
-    service_name: str
-    observed_latency_ms: float
-    error_logs: list[dict] = []
-    recent_commits: list[dict] = []
+    service_name: ServiceName
+    observed_latency_ms: float = Field(ge=0, le=MAX_LATENCY_MS, allow_inf_nan=False)
+    error_logs: list[dict] = Field(default=[], max_length=100)
+    recent_commits: list[dict] = Field(default=[], max_length=100)
 
 
 class AgentIncidentRequest(BaseModel):
@@ -196,12 +225,12 @@ class AgentDecisionRequest(BaseModel):
 
 
 class RAGQueryRequest(BaseModel):
-    query: str
-    top_k: int = 2
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(default=2, ge=1, le=10)
 
 
 class SecurityInspectRequest(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=10_000)
 
 
 @app.get("/", response_class=HTMLResponse)
