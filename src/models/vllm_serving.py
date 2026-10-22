@@ -10,7 +10,11 @@ class ModelInferenceResult:
 
 
 class VLLMServingEngine:
-    """vLLM continuous batching inference client wrapper."""
+    """STUB: placeholder for a vLLM inference client.
+
+    No model is loaded and no server is called: generate() returns a fixed JSON string.
+    It marks where a real vLLM / OpenAI-compatible endpoint would plug in.
+    """
 
     def __init__(self, model_tag: str = "qwen-1.5b-qlora@production"):
         self.model_tag = model_tag

@@ -3,9 +3,9 @@
 Runs 20 create → approve HITL cycles across 2 worker threads.
 All 20 must pass (resolve successfully) to validate multi-worker safety.
 
-Requirements:
-    - AEGIS_DATABASE_URL env var must be set
-    - PostgreSQL must be reachable
+Each incident is started on one worker's graph and approved on the other's, the
+case that returned 404 when paused incidents lived in process memory. Runs in CI
+against the workflow's Postgres service container (AEGIS_TEST_DATABASE_URL).
 """
 
 import os
@@ -15,22 +15,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 from langgraph.types import Command
 
+from src.agents.checkpointing import build_checkpointer
 from src.agents.graph import build_aegis_graph, thread_exists
 from src.agents.state import IncidentTicket
 
-# Skip the entire module if no database URL is configured
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("AEGIS_DATABASE_URL"),
-    reason="AEGIS_DATABASE_URL not set — skipping Postgres checkpointer tests",
-)
+TEST_DATABASE_URL = os.getenv("AEGIS_TEST_DATABASE_URL")
+
+pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="AEGIS_TEST_DATABASE_URL not set")
 
 NUM_RUNS = 20
 NUM_WORKERS = 2
 
 
-def _run_single_incident(run_index: int) -> dict:
-    """Execute one full create → approve cycle and return the result."""
-    app = build_aegis_graph()
+def _run_single_incident(run_index: int, start_app, resume_app) -> dict:
+    """Start an incident on one worker's graph and approve it on the other's."""
+    app = start_app
     thread_id = f"stress-{uuid.uuid4().hex[:8]}-{run_index}"
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -59,11 +58,12 @@ def _run_single_incident(run_index: int) -> dict:
     assert len(snapshot.next) > 0, f"[run {run_index}] Graph should pause at HITL"
 
     # Verify thread is persisted in Postgres (not an in-memory set)
-    assert thread_exists(thread_id), (
+    assert thread_exists(resume_app, thread_id), (
         f"[run {run_index}] Thread {thread_id} not found in checkpointer"
     )
 
-    # Phase 2 — resume with approval
+    # Phase 2 — resume with approval on the other worker
+    app = resume_app
     for _ in app.stream(
         Command(resume={"approved": True, "reviewer": f"SRE_Worker_{run_index}"}),
         config=config,
@@ -79,13 +79,24 @@ def _run_single_incident(run_index: int) -> dict:
     }
 
 
-def test_concurrent_postgres_checkpointer():
+def test_concurrent_postgres_checkpointer(monkeypatch):
     """20 create→approve cycles across 2 workers — all 20 must resolve."""
+    monkeypatch.setenv("AEGIS_DATABASE_URL", TEST_DATABASE_URL)
+    # One graph per simulated gunicorn worker / pod, each with its own pool
+    workers = [build_aegis_graph(build_checkpointer()) for _ in range(NUM_WORKERS)]
     results = []
     errors = []
 
     with ThreadPoolExecutor(max_workers=NUM_WORKERS) as pool:
-        futures = {pool.submit(_run_single_incident, i): i for i in range(NUM_RUNS)}
+        futures = {
+            pool.submit(
+                _run_single_incident,
+                i,
+                workers[i % NUM_WORKERS],
+                workers[(i + 1) % NUM_WORKERS],
+            ): i
+            for i in range(NUM_RUNS)
+        }
         for future in as_completed(futures):
             run_idx = futures[future]
             try:

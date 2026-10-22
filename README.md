@@ -8,17 +8,19 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
 [![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph%20with%20HITL-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![FastMCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-green.svg)](https://modelcontextprotocol.io/)
-[![PySpark](https://img.shields.io/badge/PySpark-Distributed%20Quantiles-E25A1C.svg)](https://spark.apache.org/)
-[![dbt](https://img.shields.io/badge/dbt-Reliability%20Marts-FF694B.svg)](https://www.getdbt.com/)
+[![Docker](https://img.shields.io/badge/Docker-non--root%20%7C%20read--only-2496ED.svg)](Dockerfile)
+[![Helm](https://img.shields.io/badge/Helm-ArgoCD%20GitOps-0F1689.svg)](k8s/helm/aegis-platform)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <p align="center">
-  <b>A sovereign, production-grade enterprise platform unifying Agentic Generative AI, Hybrid RAG, Big Data Streaming (Kafka, PySpark, dbt, Airflow), and Autonomous AIOps Incident Remediation governed by cryptographically enforced Human-In-The-Loop (HITL) approval barriers.</b>
+  <b>An AIOps incident-response platform for SRE teams: anomaly detection, hybrid runbook retrieval, service blast-radius analysis and a LangGraph agent workflow whose rollbacks wait for human approval, shipped with production deployment (Docker, CI/CD, Helm/ArgoCD, Terraform). Data-platform pieces (Kafka, Spark, dbt, Airflow) are modelled in-process; see <a href="#implementation-status">Implementation status</a>.</b>
 </p>
 
 </div>
 
 ---
+
+> 📘 **Deploying to production?** See the [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT_GUIDE.md) ([తెలుగు](docs/PRODUCTION_DEPLOYMENT_GUIDE_TE.md)) (Docker, CI/CD, VM, Kubernetes/ArgoCD, troubleshooting catalog) and the [Interview Prep guide](docs/INTERVIEW_PREP.md).
 
 ## 📑 Table of Contents
 - [Executive Overview](#-executive-overview)
@@ -40,11 +42,11 @@ In modern hyperscale cloud environments, infrastructure downtime costs between *
 
 **Aegis Enterprise AI** resolves this tension by providing:
 1. **Mathematical Transformer Foundations**: Custom multi-head self-attention and Pre-LayerNorm residual blocks built directly from scratch in PyTorch.
-2. **Hybrid RAG & Topological Graph RAG**: Lexical BM25Plus fused with dense token representations using **Reciprocal Rank Fusion (RRF)**, combined with a NetworkX microservice dependency graph to calculate upstream failure **blast radii**.
-3. **Deterministic Multi-Agent Orchestration**: Stateful **LangGraph** workflows backed by `MemorySaver` checkpointing, enforcing mandatory **Human-In-The-Loop (HITL) interrupt gates** for high-impact remediations (P1/P2 incidents).
-4. **Enterprise Data Platform**: Real-time Kafka telemetry streaming with MD5 consistent-hashing and Dead Letter Queues (DLQ), PySpark distributed quantile aggregations, dbt reliability marts, and an Airflow DAG with hard SLA breach gates.
+2. **Hybrid RAG & Topological Graph RAG**: Lexical BM25Plus fused with a token-overlap similarity score (a stand-in for neural embeddings) using **Reciprocal Rank Fusion (RRF)**, combined with a NetworkX microservice dependency graph to calculate upstream failure **blast radii**.
+3. **Deterministic Multi-Agent Orchestration**: Stateful **LangGraph** workflows (rule-based agents, no LLM calls) with **Postgres checkpointing** so paused incidents survive restarts and any worker or pod can resume them, enforcing mandatory **Human-In-The-Loop (HITL) interrupt gates** for high-impact remediations (P1/P2 incidents).
+4. **Data Platform (modelled in-process)**: Kafka-style producer/consumer with MD5 key partitioning, Dead Letter Queue and offset commits (Python, no broker); P50/P95/P99 and SLA aggregation in pandas (Spark-style API); dbt SQL models executed on SQLite; an Airflow-style task pipeline with a hard SLA breach gate.
 5. **Real-Time AIOps & Anomaly Engine**: Dual-layer anomaly detection pairing statistical rolling Z-scores for instant spike alerts with unsupervised multivariate Isolation Forests.
-6. **Production Cloud IaC & GitOps**: Terraform AWS ECS Fargate with CloudWatch budget spending alarms, Kubernetes Helm charts with Horizontal Pod Autoscalers (HPA), and ArgoCD continuous deployment.
+6. **Production Deployment**: hardened Docker image (non-root, read-only, hashed lock file, 0 HIGH/CRITICAL CVEs), CI with smoke tests against Postgres/Redis and Trivy scans, API key auth and rate limits, JSON logs with request IDs, Prometheus alerts and Grafana dashboards, Helm chart (HPA, PDB, NetworkPolicy, staging) with ArgoCD, and Terraform for a single-VM AWS deployment with a budget alarm.
 
 ---
 
@@ -55,16 +57,16 @@ flowchart TD
     subgraph Client & Observability Layer
         Browser["Enterprise Web Control Center\n(localhost:8000)"]
         Prom["Prometheus Engine\n(:9091)"]
-        MLflow["MLflow Experiment Registry\n(:5000 SQLite)"]
+        MLflow["Run Tracker\n(in-memory, MLflow-style API)"]
     end
 
     subgraph Data Platform & Event Streaming (Phase 4)
-        K_Prod["Telemetry Kafka Producer\n(MD5 Consistent Hashing)"]
+        K_Prod["Kafka-style Producer\n(in-process, MD5 partitioning)"]
         DLQ["Dead Letter Queue (DLQ)\n(Bounds & Schema Failures)"]
-        K_Cons["Telemetry Kafka Consumer\n(Offset Commits & Lag Verification)"]
-        Spark["PySpark Batch Aggregator\n(P50/P95/P99, SLA, Parquet)"]
-        dbt["dbt Dimensional Marts\n(stg_incidents -> fct_service_reliability)"]
-        Airflow["Airflow SRE ETL DAG\n(5-Stage Pipeline with SLA Hard Gate)"]
+        K_Cons["Kafka-style Consumer\n(offset commits, in-process)"]
+        Spark["Batch Aggregator (pandas)\n(P50/P95/P99, SLA, Parquet)"]
+        dbt["dbt SQL Models on SQLite\n(stg_incidents -> fct_service_reliability)"]
+        Airflow["Airflow-style ETL Tasks\n(5 stages, SLA hard gate)"]
     end
 
     subgraph Core AI & Retrieval Engine (Phase 2)
@@ -72,11 +74,11 @@ flowchart TD
         Chunker["Token-Aware Chunker\n(tiktoken, 50-token window, 10-overlap)"]
         Hybrid["AegisHybridRetriever\n(BM25Plus + Dense Token Similarity via RRF)"]
         GraphRAG["TopologicalGraphRAG\n(NetworkX Directed Acyclic Service Graph)"]
-        vLLM["vLLM Serving Engine\n(Continuous Batching & PagedAttention)"]
+        vLLM["LLM Serving Interface\n(stub, no model loaded)"]
     end
 
     subgraph Multi-Agent Orchestration & Security (Phase 3)
-        Sec["Presidio PII Redactor + Injection Defense"]
+        Sec["Regex PII Redactor + Injection Defense"]
         Triage["Triage Agent Node\n(P1/P2/P3 Severity & Approval Flagging)"]
         FastMCP["FastMCP Tool Server\n(search_kb, topology, rollback)"]
         RCA["RCA Diagnostic Node\n(Correlates Metrics + Logs + Git Commits)"]
@@ -90,7 +92,7 @@ flowchart TD
     end
 
     subgraph Cloud Infrastructure & GitOps (Phase 6)
-        TF["Terraform AWS ECS Fargate\n+ CloudWatch Budget Spending Alarms"]
+        TF["Terraform AWS EC2 VM\n+ Budget Alarm"]
         Helm["Helm Charts\n(Deployment, Service, Ingress TLS, HPA)"]
         Argo["ArgoCD GitOps\n(Automated Sync & Self-Healing Application)"]
     end
@@ -131,7 +133,7 @@ flowchart TD
 | **8000** | **Aegis Control Center & Health Matrix** | <img src="docs/media/port_8000_aegis_dashboard.png" width="400px" /> |
 | **8000** | **Hybrid RAG & Microservice Topology** | <img src="docs/media/port_8000_tab_rag_topology.png" width="400px" /> |
 | **8000** | **Multi-Agent Orchestrator & HITL Gates** | <img src="docs/media/port_8000_tab_multiagent_security.png" width="400px" /> |
-| **8000** | **Airflow SRE Pipeline & PySpark Quantiles** | <img src="docs/media/port_8000_tab_airflow_pyspark.png" width="400px" /> |
+| **8000** | **ETL Pipeline & Quantile Aggregation (Airflow/Spark-style, in-process)** | <img src="docs/media/port_8000_tab_airflow_pyspark.png" width="400px" /> |
 | **8000** | **20-Fault Chaos & Evaluation Gates** | <img src="docs/media/port_8000_tab_eval_chaos.png" width="400px" /> |
 | **9091** | **Prometheus Metrics Query Engine** | <img src="docs/media/port_9091_prometheus.png" width="400px" /> |
 | **3001** | **Grafana Production SRE Dashboards** | <img src="docs/media/port_3001_grafana.png" width="400px" /> |
@@ -172,10 +174,10 @@ app.stream(Command(resume={"approved": True, "reviewer": "Alice_SRE"}), config=c
 | :--- | :--- | :--- |
 | **Phase 1** | **Foundation** | Python monorepo, master dependencies, non-colliding container stack (`:5435`, `:6382`, `:9091`, `:3001`), in-memory fallbacks. |
 | **Phase 2** | **RAG & Deep Learning** | PyTorch Transformer block, token-aware chunker with `tiktoken`, query rewriter, hybrid RRF search, topological Graph RAG. |
-| **Phase 3** | **Multi-Agent & Security** | FastMCP tool server, Presidio PII redaction, prompt injection defense, RBAC allowlist, LangGraph HITL interrupt state machine. |
-| **Phase 4** | **Data Platform & Streaming** | Kafka producer with MD5 consistent-hashing & DLQ, consumer lag commits, PySpark quantiles, dbt reliability marts, Airflow SLA gate. |
+| **Phase 3** | **Multi-Agent & Security** | FastMCP tool server, regex PII redaction, prompt injection defense, RBAC allowlist, LangGraph HITL interrupt state machine. |
+| **Phase 4** | **Data Platform (in-process models)** | Kafka-style producer with MD5 partitioning & DLQ, consumer offset commits, pandas quantile aggregation, dbt SQL on SQLite, Airflow-style SLA gate. |
 | **Phase 5** | **AIOps & Serving** | Dual-layer anomaly engine (Z-score + Isolation Forest), RCA agent with commit correlation, Prometheus `/metrics`, FastAPI 6-tab portal. |
-| **Phase 6** | **Production IaC & GitOps** | Terraform AWS ECS Fargate with $1k budget spending alarm, Kubernetes Helm charts with HPA (3–10 pods), ArgoCD GitOps application. |
+| **Phase 6** | **Production IaC & GitOps** | Terraform AWS EC2 VM with remote state and budget alarm, Helm chart (HPA 3–10 pods, PDB, NetworkPolicy, secrets), ArgoCD production + staging applications. |
 | **Phase 7** | **Evaluation & Chaos** | Enterprise RAGAS evaluator, 50-scenario agent benchmark, 20-fault chaos engineering test suite, GitHub Actions CI workflow. |
 
 ---
@@ -187,13 +189,12 @@ All backing services are configured with **isolated, non-colliding host ports** 
 | Service | Host Port | Protocol / URL | Architectural Role | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **Aegis Web Portal** | `8000` | `http://localhost:8000` | FastAPI Control Center & REST API | **ONLINE** |
-| **MLflow Registry** | `5000` | `http://localhost:5000` | Experiment Tracker & Model Store | **ONLINE** |
+| **MLflow UI** (optional) | `5000` | `http://localhost:5000` | Started by `start_all_services.ps1`; the code does not log to it yet | Optional |
 | **Prometheus Metrics**| `9091` | `http://localhost:9091` | Time-Series Metrics Scraper & UI | **ONLINE** |
 | **Grafana Dashboards**| `3001` | `http://localhost:3001` | SRE Dashboards (`admin` / `admin`) | **ONLINE** |
-| **PostgreSQL (pgvector)** | `5435` | `localhost:5435` | Vector Store & Incident Archive | **ONLINE** |
-| **Redis 7 Store** | `6382` | `localhost:6382` | Distributed Cache (with memory fallback) | **ONLINE** |
-| **PySpark Spark UI** | `4040` | `http://localhost:4040` | Spark Job Telemetry (Active on run) | **ONLINE** |
-| **Airflow Webserver** | `8080` | `http://localhost:8080` | DAG UI (One-click execution from Web Portal) | **ONLINE** |
+| **PostgreSQL (pgvector)** | `5435` | `localhost:5435` | HITL incident checkpoints (`AEGIS_DATABASE_URL`) | **ONLINE** |
+| **Redis 7 Store** | `6382` | `localhost:6382` | Anomaly baselines & rate-limit counters (`AEGIS_REDIS_URL`) | **ONLINE** |
+| **Spark UI / Airflow** | `4040` / `8080` | — | Not part of this repo: the pipeline runs in-process (pandas / Python tasks) | Simulated |
 
 ---
 
@@ -276,11 +277,12 @@ curl -X POST localhost:8000/v1/agent/incidents/<thread_id>/decision \
   -H "Content-Type: application/json" -d '{"approved":true,"reviewer":"Uma_SRE"}'
 ```
 
+<a id="implementation-status"></a>
 ### Implementation status
 
 | Real | Simulated / stub |
 | :--- | :--- |
-| FastAPI, Pydantic, Prometheus metrics, LangGraph HITL state machine, BM25 + RRF retrieval, NetworkX blast radius, Z-score + Isolation Forest, dbt SQL on SQLite | Kafka and Spark (in-memory Python/pandas), vLLM and MLflow (stubs), rollback tool, regex PII/injection checks (not Presidio), word-overlap "dense" score (no embeddings), no LLM calls, Terraform/Helm/ArgoCD not applied |
+| FastAPI, Pydantic, Prometheus metrics + alert rules, LangGraph HITL state machine with Postgres checkpoints, Redis-shared anomaly baselines, API key auth + rate limits, JSON logs with request IDs, BM25 + RRF retrieval, NetworkX blast radius, Z-score + Isolation Forest, dbt SQL on SQLite, Docker image + CI smoke tests + Trivy | Kafka and Spark (in-process Python/pandas), vLLM and MLflow (stubs), rollback tool (returns text, touches no cluster), regex PII/injection checks (not Presidio), token-overlap "dense" score (no embeddings), no LLM calls, Terraform/Helm/ArgoCD validated (`terraform validate`, `helm lint`) but not applied to a live cloud account |
 
 ---
 
@@ -290,7 +292,8 @@ curl -X POST localhost:8000/v1/agent/incidents/<thread_id>/decision \
 aegis-enterprise-ai/
 ├── .github/workflows/ci.yml         # GitHub Actions CI automation pipeline
 ├── pyproject.toml                   # Ruff, packaging, and pytest settings
-├── requirements.txt                 # Master pinned dependencies
+├── requirements.txt                 # Full dev/research dependencies
+├── requirements-prod.in / .txt      # Image dependencies / hashed lock file
 ├── docker/
 │   ├── docker-compose.yml           # Multi-container orchestration (5435, 6382, 9091, 3001)
 │   └── prometheus.yml               # Scrape config targeting FastAPI backend
@@ -302,48 +305,53 @@ aegis-enterprise-ai/
 │   ├── framework_comparison.md      # Spike: LangGraph vs CrewAI vs AutoGen
 │   └── vector_db_comparison.md      # Spike: pgvector vs FAISS vs Pinecone vs Milvus
 ├── terraform/
-│   ├── providers.tf                 # AWS provider requirements (>= 5.0)
-│   ├── variables.tf                 # Cloud variables (region, budget limits)
-│   ├── ecs_fargate.tf               # AWS ECS Fargate cluster & task definitions
-│   └── budget_alarm.tf              # CloudWatch monthly budget alarm ($1k spend)
+│   ├── providers.tf                 # AWS provider + S3 remote state (native locking)
+│   ├── variables.tf                 # Region, instance size, SSH CIDR, budget
+│   ├── main.tf                      # EC2 VM, security group, key pair, Elastic IP
+│   ├── user_data.sh                 # First boot: Docker + repository checkout
+│   └── budget_alarm.tf              # AWS Budgets monthly cost alarm
 ├── k8s/
-│   ├── argocd/application.yaml      # ArgoCD declarative GitOps application
-│   └── helm/aegis-platform/         # Helm charts (Deploy, Svc, TLS Ingress, HPA 3-10)
+│   ├── argocd/                      # ArgoCD applications (production + staging)
+│   └── helm/aegis-platform/         # Helm chart (Deploy, Svc, TLS Ingress, HPA, PDB, NetworkPolicy)
 ├── data_platform/
-│   ├── kafka/producer.py            # MD5 consistent-hashing producer with DLQ
-│   ├── kafka/consumer.py            # Consumer lag & offset commit manager
-│   ├── spark/batch_aggregator.py    # PySpark distributed batch quantiles & SLAs
-│   ├── dbt_project/                 # dbt staging (stg_incidents) & marts (fct_service_reliability)
-│   └── airflow/dags/daily_sre_etl.py# 5-stage Airflow DAG with hard SLA breach gate
+│   ├── kafka/producer.py            # Kafka-style producer: MD5 partitioning + DLQ (in-process)
+│   ├── kafka/consumer.py            # Consumer group & offset commits (in-process)
+│   ├── spark/batch_aggregator.py    # pandas quantiles & SLAs (Spark-style batch API)
+│   ├── dbt_project/                 # dbt SQL models, executed on SQLite by dbt_runner.py
+│   └── airflow/dags/daily_sre_etl.py# Airflow-style 5-stage pipeline with SLA breach gate
 ├── src/
 │   ├── models/
 │   │   ├── transformer_scratch.py   # Multi-Head Attention & Transformer block from scratch
-│   │   ├── vllm_serving.py          # Continuous batching LLM client wrapper
+│   │   ├── vllm_serving.py          # STUB: LLM serving interface (returns fixed JSON)
 │   │   └── prompt_engine.py         # Structured Pydantic LLM output schemas
 │   ├── rag/
 │   │   ├── chunking.py              # Token-aware chunker with tiktoken overlap
 │   │   ├── query_rewriter.py        # SRE query expansion & synonym mapping
-│   │   ├── hybrid_retriever.py      # Lexical BM25Plus + Dense Cosine via RRF
+│   │   ├── hybrid_retriever.py      # BM25Plus + token-overlap similarity via RRF
 │   │   ├── graph_rag.py             # NetworkX topological blast radius tracer
 │   │   └── multimodal_rag.py        # Diagram & table PDF runbook parser
 │   ├── mcp/
 │   │   └── server.py                # FastMCP tool server (search, topology, rollback)
 │   ├── security/
-│   │   ├── presidio_redactor.py     # Microsoft Presidio PII redaction engine
+│   │   ├── pii_redactor.py          # Regex PII redaction (SSN, card, email, phone, keys)
 │   │   ├── injection_defense.py     # Prompt injection & jailbreak quarantine
 │   │   ├── tool_allowlist.py        # Role-based tool access control (RBAC)
 │   │   └── system_card.md           # Responsible AI System Card & bounds
 │   ├── agents/
 │   │   ├── state.py                 # TypedDict & Pydantic state contracts
 │   │   ├── graph.py                 # LangGraph state machine with HITL interrupt
+│   │   ├── checkpointing.py         # Postgres (shared) or in-memory HITL checkpoints
 │   │   └── rca_agent.py             # Autonomous RCA metric/log/commit correlator
 │   ├── observability/
 │   │   ├── anomaly_engine.py        # Dual-layer Z-Score & Isolation Forest
 │   │   ├── prometheus_exporter.py   # Prometheus Counter & Histogram metrics
-│   │   ├── otel_instrumentation.py  # OpenTelemetry tracing instrumentation
-│   │   └── mlflow_tracker.py        # MLflow tracking connected to SQLite
+│   │   ├── baseline_store.py        # Redis (shared) or in-memory anomaly baselines
+│   │   ├── logging_config.py        # JSON logs with per-request correlation IDs
+│   │   ├── otel_instrumentation.py  # OpenTelemetry tracing (when an OTLP endpoint is set)
+│   │   └── mlflow_tracker.py        # In-memory run tracker (MLflow-style API, no mlflow)
 │   └── api/
 │       ├── main.py                  # FastAPI REST gateway & reachability API
+│       ├── security.py              # X-API-Key auth and rate limits for /v1
 │       ├── dashboard.py             # Dynamic HTML generator for 6-tab portal
 │       └── templates/index.html     # Standalone client HTML template
 ├── tests/                           # Unit tests across Phases 2, 3, 4, and 5
@@ -356,7 +364,8 @@ aegis-enterprise-ai/
 
 See [src/security/system_card.md](src/security/system_card.md) for complete governance specifications:
 * **Human Oversight**: Destructive actions (pod restarts, rollbacks) strictly mandate authenticated human SRE approval via LangGraph interrupts.
-* **Privacy & PII**: All incoming tickets and queries are scrubbed of SSNs, emails, IPv4 addresses, and secret bearer tokens via Microsoft Presidio patterns.
+* **Privacy & PII**: Incoming tickets are scrubbed of SSNs, credit card numbers, emails, phone numbers and cloud API keys with regex patterns (no NER model, so unusual formats can slip through).
+* **Access control**: `/v1` endpoints require an `X-API-Key` when `AEGIS_API_KEY` is set (always, in the production compose file and Helm chart); heavy endpoints are rate limited.
 * **Adversarial Hardening**: Prompt injections trigger immediate quarantine before model tokenization.
 * **Fairness & Objectivity**: Incident severity is derived strictly from telemetry metrics and error logs rather than user metadata.
 

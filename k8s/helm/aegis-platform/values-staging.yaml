@@ -1,0 +1,30 @@
+# Staging overrides (layered on values.yaml by the aegis-staging ArgoCD Application).
+# Same image and chart as production, smaller and on its own hostname and secrets.
+replicaCount: 2
+
+image:
+  # Staging tracks newer builds first: set a main-branch SHA here, then promote the
+  # same tag to values.yaml for production once staging is verified.
+  tag: "1.0.0"
+
+env:
+  AEGIS_CORS_ORIGINS: "https://staging.aegis.enterprise.ai"
+  WEB_CONCURRENCY: "2"
+  FORWARDED_ALLOW_IPS: "*"
+
+ingress:
+  hosts:
+    - host: staging.aegis.enterprise.ai
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: aegis-staging-tls
+      hosts:
+        - staging.aegis.enterprise.ai
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  minAvailable: 1

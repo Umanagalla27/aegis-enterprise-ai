@@ -1,3 +1,7 @@
+{{- $multiPod := or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1) }}
+{{- if and $multiPod (not .Values.secrets.existingSecret) }}
+{{- fail "secrets.existingSecret is required with more than one replica: HITL approvals and baselines must live in Postgres/Redis, not per-pod memory. For a single dev replica set replicaCount=1 and autoscaling.enabled=false." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,29 +19,82 @@ spec:
     metadata:
       labels:
         {{- include "aegis-platform.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.service.targetPort | default 8000 | quote }}
+        prometheus.io/path: /metrics
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The app never calls the Kubernetes API, so no service-account token is mounted
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Longer than gunicorn's --graceful-timeout so in-flight requests finish on rollout
+      terminationGracePeriodSeconds: 40
       containers:
         - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort | default 8000 }}
               protocol: TCP
-          envFrom:
-            - secretRef:
-                name: {{ include "aegis-platform.fullname" . }}-db
+          env:
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- with .Values.secrets.existingSecret }}
+            - name: AEGIS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.apiKeyKey }}
+            - name: AEGIS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.databaseUrlKey }}
+            - name: AEGIS_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.secrets.redisUrlKey }}
+            {{- end }}
+          volumeMounts:
+            # Writable paths on top of the read-only root filesystem
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /app/data
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
           livenessProbe:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi

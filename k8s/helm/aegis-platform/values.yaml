@@ -1,11 +1,48 @@
 replicaCount: 3
 
 image:
+  # Pushed by .github/workflows/ci.yml: :<short-sha> and :latest for every commit on
+  # main, :1.0.0 for a v1.0.0 tag. "latest" works before any release tag exists;
+  # pin a short SHA or version here for repeatable deploys (then IfNotPresent).
   repository: ghcr.io/umanagalla27/aegis-enterprise-ai
   pullPolicy: Always
-  # CI auto-updates this to the commit SHA after each successful build.
-  # Fallback "latest" ensures first deploy works; production should pin to SHA.
   tag: "latest"
+
+imagePullSecrets: []
+
+env:
+  AEGIS_CORS_ORIGINS: "https://api.aegis.enterprise.ai"
+  WEB_CONCURRENCY: "2"
+  # Pods are reachable only through the ingress controller (see networkPolicy), so its
+  # X-Forwarded-For is trusted for client IPs (per-client rate limits).
+  FORWARDED_ALLOW_IPS: "*"
+
+# Secret with the keys below, created outside Git (kubectl, External Secrets, Vault):
+#   kubectl -n aegis-production create secret generic aegis-secrets \
+#     --from-literal=api-key="$(openssl rand -hex 32)" \
+#     --from-literal=database-url="$AEGIS_DATABASE_URL" \
+#     --from-literal=redis-url='redis://HOST:6379/0'
+# Several replicas or workers need it: HITL approvals, anomaly baselines and rate-limit
+# counters live in Postgres/Redis. Leave it empty only for a single replica (dev / kind).
+secrets:
+  existingSecret: "aegis-secrets"
+  apiKeyKey: api-key
+  databaseUrlKey: database-url
+  redisUrlKey: redis-url
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
 
 service:
   type: ClusterIP
@@ -23,14 +60,23 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
+  # cert-manager only issues a certificate when the Ingress has a tls block
+  tls:
+    - secretName: aegis-api-tls
+      hosts:
+        - api.aegis.enterprise.ai
 
+# Measured with 2 workers: ~400 MiB idle, ~475 MiB under concurrent eval/ETL load.
 resources:
   limits:
     cpu: 1000m
-    memory: 2Gi
+    memory: 1Gi
+    # Local disk (logs, /tmp, /app/data); exceeding it evicts this pod, not the whole node
+    ephemeral-storage: 1Gi
   requests:
     cpu: 250m
     memory: 512Mi
+    ephemeral-storage: 256Mi
 
 autoscaling:
   enabled: true
@@ -39,7 +85,13 @@ autoscaling:
   targetCPUUtilizationPercentage: 75
   targetMemoryUtilizationPercentage: 80
 
-db:
-  # Connection string for LangGraph PostgresSaver checkpointer.
-  # Override per-environment with --set db.url=...
-  url: "postgresql://uma:password@aegis-postgres:5432/aegis_db"
+# Keeps at least this many pods up during node drains and cluster upgrades.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Only the ingress controller and Prometheus may open connections to the pods.
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+  monitoringNamespace: monitoring

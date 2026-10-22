@@ -89,3 +89,39 @@ def test_fastapi_endpoints_and_prometheus_metrics():
     metrics_data, content_type = get_prometheus_metrics()
     assert b"aegis_http_requests_total" in metrics_data
     assert "text/plain" in content_type
+
+
+def test_telemetry_ingest_learns_baseline_and_flags_spike():
+    client = TestClient(app)
+    normal = {
+        "service_name": "api-gateway",
+        "cpu_percent": 40.0,
+        "memory_percent": 50.0,
+        "status_code": 200,
+    }
+    for i in range(40):
+        client.post("/v1/telemetry/ingest", json={**normal, "latency_ms": 40.0 + i % 5})
+
+    res = client.post("/v1/telemetry/ingest", json={**normal, "latency_ms": 2500.0}).json()
+    assert res["anomaly_result"]["details"]["baseline_ready"] is True
+    assert res["anomaly_result"]["is_anomaly"] is True
+
+
+def test_metrics_label_unknown_paths_as_unmatched():
+    client = TestClient(app)
+    client.get("/does-not-exist-12345")
+    body = client.get("/metrics").text
+    assert "does-not-exist-12345" not in body
+    assert 'endpoint="unmatched"' in body
+
+
+def test_rca_ignores_logs_and_commits_from_other_services():
+    agent = RootCauseAnalysisAgent()
+    report = agent.diagnose_incident(
+        service_name="api-gateway",
+        anomaly_details={"observed_value": 50.0},
+        recent_logs=[{"service": "billing", "level": "ERROR", "message": "unrelated"}],
+        recent_commits=[{"commit_hash": "abc", "service": "billing", "message": "other"}],
+    )
+    assert report.correlated_logs == []
+    assert report.correlated_commits == []

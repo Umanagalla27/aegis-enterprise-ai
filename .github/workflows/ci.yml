@@ -3,29 +3,36 @@ name: Aegis Enterprise AI CI Pipeline
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]          # trigger on version tags like v1.0.0
+    # Release tags (git tag v1.0.0 && git push origin v1.0.0) publish :1.0.0 images
+    tags: [ "v*" ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+# Least privilege: jobs get a read-only token unless they ask for more
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # umanagalla27/aegis-enterprise-ai
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/aegis-enterprise-ai
 
 jobs:
-  # ── Job 1: Lint, test, quality gates ──────────────────────────────────
   lint-and-test:
     name: Code Quality, Unit Tests & Regression Gates
     runs-on: ubuntu-latest
-    env:
-      AEGIS_DATABASE_URL: postgresql://postgres:password@localhost:5432/aegis_db
 
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
           POSTGRES_DB: aegis_db
+          # Throwaway CI database: trust auth, so no password exists to leak or hard-code
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -46,10 +53,12 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -70,9 +79,6 @@ jobs:
       - name: Run Phase 3 (Multi-Agent & Security) Tests
         run: pytest tests/test_phase3.py -v
 
-      - name: Run Postgres Checkpointer Concurrency Tests (2 Workers, 20 Cycles)
-        run: pytest tests/test_postgres_checkpointer.py -v -s
-
       - name: Run Phase 4 (Kafka, Spark, dbt, Airflow) Tests
         run: pytest tests/test_phase4.py -v
 
@@ -82,103 +88,118 @@ jobs:
       - name: Run Bug-Fix Regression Tests
         run: pytest tests/test_regressions.py -v
 
+      - name: Run Shared-State, API Security & Observability Tests
+        env:
+          # Service containers above; without these the Postgres/Redis tests skip.
+          AEGIS_TEST_DATABASE_URL: postgresql://postgres@localhost:5432/aegis_db
+          AEGIS_TEST_REDIS_URL: redis://localhost:6379/0
+        run: pytest tests/test_shared_state.py tests/test_api_security.py tests/test_observability.py -v -rs
+
+      - name: Run Postgres Checkpointer Concurrency Tests (2 Workers, 20 Cycles)
+        env:
+          AEGIS_TEST_DATABASE_URL: postgresql://postgres@localhost:5432/aegis_db
+        run: pytest tests/test_postgres_checkpointer.py -v -s -rs
+
       - name: Run Phase 7 (RAGAS & Agent Regression Gates) Tests
         run: pytest eval/test_eval_gates.py -v
 
       - name: Run 20-Fault Chaos Engineering Evaluation
         run: python eval/run_aiops_eval.py
 
-  # ── Job 2: Build & push Docker image ──────────────────────────────────
-  build-and-push:
-    name: Build & Push Container Image
-    runs-on: ubuntu-latest
+  build-and-push-image:
+    name: Build, Scan & Push Container Image
     needs: lint-and-test
-    if: github.event_name == 'push'   # only on main push or tags, not PRs
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
-    outputs:
-      short_sha: ${{ steps.meta.outputs.short_sha }}
-      image_tags: ${{ steps.meta.outputs.tags }}
+    # The smoke test runs the image with several workers against real Postgres/Redis,
+    # the same shape as production.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: aegis_db
+          # Throwaway CI database: trust auth, so no password exists to leak or hard-code
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute image metadata & tags
-        id: meta
-        run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-
-          TAGS="${REGISTRY}/${IMAGE_NAME}:${SHORT_SHA}"
-          TAGS="${TAGS},${REGISTRY}/${IMAGE_NAME}:latest"
-
-          # If this is a version tag (e.g. v1.0.0), also push :1.0.0
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            TAGS="${TAGS},${REGISTRY}/${IMAGE_NAME}:${VERSION}"
-          fi
-
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-          echo "### 🐳 Image Tags" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${TAGS}" | tr ',' '\n' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
+      - name: Build Image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          tags: aegis-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Job 3: Auto-update values.yaml with the new SHA tag ───────────────
-  update-helm-tag:
-    name: Update Helm Image Tag
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-      pull-requests: write
+      - name: Smoke Test Container (3 workers, Postgres, Redis, API key)
+        run: |
+          docker run -d --name aegis --init --network host --read-only --tmpfs /tmp \
+            --tmpfs /app/data:uid=10001,gid=10001 \
+            -e WEB_CONCURRENCY=3 \
+            -e AEGIS_API_KEY=ci-smoke-key \
+            -e AEGIS_HEAVY_RATE_LIMIT=100/minute \
+            -e AEGIS_DATABASE_URL=postgresql://postgres@localhost:5432/aegis_db \
+            -e AEGIS_REDIS_URL=redis://localhost:6379/0 \
+            aegis-api:ci
+          scripts/smoke_test.sh http://localhost:8000 ci-smoke-key 20 || { docker logs aegis; exit 1; }
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Scan Image for Vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          image-ref: aegis-api:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
 
-      - name: Update values.yaml with new SHA tag
-        env:
-          NEW_TAG: ${{ needs.build-and-push.outputs.short_sha }}
-        run: |
-          echo "Updating image tag to: ${NEW_TAG}"
-          # Replace the tag line in values.yaml (matches '  tag: "..."')
-          sed -i "s|^  tag: \".*\"|  tag: \"${NEW_TAG}\"|" \
-            k8s/helm/aegis-platform/values.yaml
-          echo "### ✅ Helm tag updated" >> "$GITHUB_STEP_SUMMARY"
-          echo "New tag: \`${NEW_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Commit and push tag update
+      - name: Tag & Push Image
+        if: github.event_name != 'pull_request'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/helm/aegis-platform/values.yaml
-          # Only commit if there are actual changes
-          git diff --cached --quiet && echo "No tag change" && exit 0
-          git commit -m "ci: update image tag to ${{ needs.build-and-push.outputs.short_sha }} [skip ci]"
-          git push
+          IMAGE="${IMAGE_NAME,,}"
+          docker tag aegis-api:ci "$IMAGE:${GITHUB_SHA::7}"
+          docker push "$IMAGE:${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            docker tag aegis-api:ci "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
+          # v1.2.3 tag -> :1.2.3, the tag the Helm chart and .env.example deploy
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            docker tag aegis-api:ci "$IMAGE:$VERSION"
+            docker push "$IMAGE:$VERSION"
+          fi

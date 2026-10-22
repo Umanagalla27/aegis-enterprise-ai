@@ -1,0 +1,52 @@
+# Alert on symptoms users feel (errors, latency, availability), not on causes like CPU.
+groups:
+  - name: aegis-api
+    rules:
+      - alert: AegisApiDown
+        expr: up{job="aegis-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Aegis API is not reachable by Prometheus"
+          runbook: "docs/PRODUCTION_DEPLOYMENT_GUIDE.md#troubleshooting-catalog (CrashLoopBackOff / 502)"
+
+      - alert: AegisHighErrorRate
+        expr: |
+          100 * sum(rate(aegis_http_requests_total{status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(aegis_http_requests_total[5m])), 1e-9) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 1% of requests are failing with 5xx"
+          runbook: "Check recent deploys and roll back first (Phase 9), then read the logs by request_id"
+
+      - alert: AegisHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(aegis_http_request_duration_seconds_bucket{endpoint!~"/v1/eval/.*|/v1/airflow/.*"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 500 ms for interactive endpoints"
+          runbook: "Check saturation (CPU/memory per pod), Postgres/Redis latency, recent deploys"
+
+      - alert: AegisRateLimitedRequests
+        expr: sum(rate(aegis_http_requests_total{status_code="429"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Clients are being rate limited on heavy endpoints"
+          runbook: "Expected under abuse; raise AEGIS_HEAVY_RATE_LIMIT only for a known client"
+
+      - alert: AegisCriticalAnomalies
+        expr: sum(increase(aegis_anomaly_detections_total{severity="CRITICAL"}[10m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Several CRITICAL telemetry anomalies in the last 10 minutes"
+          runbook: "Open the Aegis dashboard and start an agent incident for the affected service"

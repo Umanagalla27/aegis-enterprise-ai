@@ -39,7 +39,7 @@ def extract_telemetry(raw_events: list[dict[str, Any]] | None = None) -> list[di
 
 def spark_batch_agg(
     telemetry_records: list[dict[str, Any]],
-    output_path: str = "data/analytics/daily_service_metrics.parquet",
+    output_path: str | None = None,
 ) -> pd.DataFrame:
     """Task 2: Distributed batch processing formulating quantiles and SLAs."""
     aggregator = SparkBatchAggregator(output_path=output_path)

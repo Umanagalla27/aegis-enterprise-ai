@@ -237,3 +237,6 @@ terraform.rc
 results/tmp/
 *.db
 mlflow.db
+
+# Terraform backend settings (names your state bucket)
+terraform/backend.hcl
