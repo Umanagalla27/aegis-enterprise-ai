@@ -175,6 +175,13 @@ baseline_ready = metric_name in self.baseline_stats
 - Trivy found 4 HIGH CVEs in `urllib3`/`msgpack`/`setuptools`, which the app never installs: they were **vendored inside pip**. Fix: remove pip from the runtime image.
 - SonarCloud: actions referenced by movable tags (`@v3`), so every action is now pinned to a full commit SHA; and no `ephemeral-storage` limits, so limits were added.
 - A teammate's PR landed first; after merging `main`, the container smoke test caught a missing `langgraph` dependency in the production image before it shipped.
+- A `requirements.txt` produced by `pip freeze` on Windows (UTF-16, with `pywin32`) broke `pip install` on the Linux runner. Fix: a curated `requirements.txt` plus a `pip-compile` lock for the image. Re-running the failed job could never pass, because a re-run tests the same commit.
+
+### Bug 15: the whole dashboard was dead, while every API test passed
+
+- Clicking a tab in the web portal did nothing. The browser console showed `SyntaxError: Identifier 'anomaly' has already been declared`: a merge had left `const anomaly = ...` twice in one function. One syntax error makes the browser drop the **entire** `<script>`, so `switchTab` and every button handler were undefined.
+- API tests use `TestClient` and never run the page's JavaScript, so CI stayed green. Found by clicking through the page in a headless Chromium (Playwright). Fix: remove the duplicate; a regression test now runs `node --check` on every inline script of `/`.
+- *"Green API tests don't prove the UI works. Test what the user actually runs, at least a syntax check plus one browser smoke test."*
 
 ---
 
